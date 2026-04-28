@@ -34,6 +34,18 @@ dev_sent_emo.csv:   1109 utterances
 test_sent_emo.csv:  2610 utterances
 ```
 
+Dialogue counts parsed from the CSV files:
+
+```text
+train: 1038 unique Dialogue_ID values
+dev:    114 unique Dialogue_ID values
+test:   280 unique Dialogue_ID values
+```
+
+The train metadata has a gap at `Dialogue_ID=60`. The parser preserves the official CSV ids instead of renumbering them, so dialogue batching remains aligned with the source metadata.
+
+This gap does not mean that one existing dialogue failed to download. It means no row in `train_sent_emo.csv` uses `Dialogue_ID=60`. The most likely explanation is that MELD preserves dialogue ids after its dataset-cleaning/filtering process. The official README notes that some EmotionLines cases were filtered because they mixed multiple natural dialogues or failed timestamp/scene constraints, so ids should be treated as stable identifiers rather than a guaranteed contiguous sequence.
+
 Extracted video counts:
 
 ```text
@@ -105,3 +117,74 @@ For implementation, keep the official split and handle missing media explicitly:
 - Log missing media during feature extraction instead of failing silently.
 - Make missing-modality handling compatible with the planned modality dropout and gated fusion design.
 
+## 2026-04-28: Text Feature Extraction Script
+
+Implemented `src/extract_text_features.py` for frozen RoBERTa utterance-level text embeddings.
+
+Supported behavior:
+
+- Load MELD utterances through `src.dataset`.
+- Process one or more official splits.
+- Read text settings from `configs/text_only.yaml` or CLI arguments.
+- Support `mean` pooling and `cls` pooling.
+- Save outputs to `features/text_roberta/{split}.pt`.
+- Save features together with labels, dialogue ids, utterance ids, keys, texts, speakers, emotions, and sentiments.
+- Provide `--dry-run` mode for checking split sizes and output paths without loading pretrained models.
+
+Verified dry-run command:
+
+```text
+conda run -n workspace python -m src.extract_text_features --config configs/text_only.yaml --split dev --dry-run
+```
+
+Output:
+
+```text
+[dry-run] split=dev, utterances=1109, output=features/text_roberta/dev.pt
+```
+
+Environment note:
+
+- `workspace` currently has `torch`, `torchaudio`, and `torchvision`.
+- `workspace` does not currently have `transformers`, `tqdm`, or `pyyaml`.
+- The script can still run `--dry-run` in `workspace` because YAML and progress-bar dependencies are optional/fallback for that mode.
+- Real RoBERTa feature extraction will require `transformers` in the environment used to run the script.
+
+## 2026-04-29: Code Simplification for Course Project Scope
+
+Simplified the dataset and feature extraction scripts to better fit a course-project codebase rather than a production-style pipeline.
+
+Main changes:
+
+- Reduced `src/dataset.py` to the core MELD parsing functions and simple dialogue grouping.
+- Removed extra dataset wrapper classes and overly defensive parsing options.
+- Simplified text feature extraction while keeping RoBERTa mean/CLS pooling and `.pt` output metadata.
+- Simplified audio feature extraction to use ffmpeg-based mp4 audio decoding directly, then Wav2Vec2 mean pooling.
+- Simplified visual feature extraction to uniform frame sampling plus CLIP frame-feature averaging.
+- Added more Chinese comments around dataset ids, missing media, pooling, zero-vector handling, and batching logic.
+
+The four main scripts went from about 1523 lines to about 938 lines:
+
+```text
+src/dataset.py
+src/extract_text_features.py
+src/extract_audio_features.py
+src/extract_visual_features.py
+```
+
+Verification after simplification:
+
+```text
+conda run -n workspace python -m compileall src/dataset.py src/extract_text_features.py src/extract_audio_features.py src/extract_visual_features.py
+conda run -n workspace python -m src.dataset --data-root data/meld --split dev
+conda run -n workspace python -m src.extract_text_features --config configs/text_only.yaml --split dev --dry-run
+conda run -n workspace python -m src.extract_audio_features --split dev --dry-run
+conda run -n workspace python -m src.extract_visual_features --split dev --dry-run
+```
+
+Also verified one MELD mp4 can be decoded by the simplified audio and visual helpers:
+
+```text
+audio waveform shape: (44715,)
+visual frames: 4 frames, first frame shape (720, 1280, 3)
+```

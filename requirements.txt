@@ -3,6 +3,7 @@ transformers
 torchaudio
 librosa
 opencv-python
+imageio-ffmpeg
 scikit-learn
 numpy
 pandas

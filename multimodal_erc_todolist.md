@@ -43,7 +43,7 @@ README.md
 
 Dataset: **MELD**
 
-- [ ] Place MELD files under:
+- [x] Place MELD files under:
 
 ```text
 data/meld/
@@ -65,16 +65,16 @@ dev_splits_complete/
 output_repeated_splits_test/
 ```
 
-- [ ] Implement `src/dataset.py`.
-- [ ] Parse each utterance with fields:
+- [x] Implement `src/dataset.py`.
+- [x] Parse each utterance with fields:
   - `Dialogue_ID`
   - `Utterance_ID`
   - `Utterance`
   - `Emotion`
   - `Sentiment`
   - media path
-- [ ] Keep official train/dev/test split.
-- [ ] Map 7 emotion labels to integer ids:
+- [x] Keep official train/dev/test split.
+- [x] Map 7 emotion labels to integer ids:
 
 ```python
 emotion2id = {
@@ -98,9 +98,9 @@ Use frozen pretrained encoders. Save extracted features to `.npy` or `.pt`.
 
 Model: `FacebookAI/roberta-base`
 
-- [ ] Create `src/extract_text_features.py`.
-- [ ] Input: utterance text.
-- [ ] Output: utterance-level text embedding.
+- [x] Create `src/extract_text_features.py`.
+- [x] Input: utterance text.
+- [x] Output: utterance-level text embedding.
 
 Default settings:
 
@@ -124,10 +124,10 @@ features/text_roberta/{split}.pt
 
 Model: `facebook/wav2vec2-base`
 
-- [ ] Create `src/extract_audio_features.py`.
-- [ ] Convert audio to 16 kHz.
-- [ ] Input: utterance-level audio clip.
-- [ ] Output: mean-pooled Wav2Vec2 hidden states.
+- [x] Create `src/extract_audio_features.py`.
+- [x] Convert audio to 16 kHz.
+- [x] Input: utterance-level audio clip.
+- [x] Output: mean-pooled Wav2Vec2 hidden states.
 
 Default settings:
 
@@ -152,10 +152,10 @@ features/audio_wav2vec2/{split}.pt
 
 Model: `openai/clip-vit-base-patch32`
 
-- [ ] Create `src/extract_visual_features.py`.
-- [ ] Sample frames from each utterance video.
-- [ ] Extract CLIP image features for each frame.
-- [ ] Mean-pool frame features into one utterance-level visual embedding.
+- [x] Create `src/extract_visual_features.py`.
+- [x] Sample frames from each utterance video.
+- [x] Extract CLIP image features for each frame.
+- [x] Mean-pool frame features into one utterance-level visual embedding.
 
 Default settings:
 
