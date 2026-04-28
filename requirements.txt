@@ -1,0 +1,12 @@
+torch
+transformers
+torchaudio
+librosa
+opencv-python
+scikit-learn
+numpy
+pandas
+tqdm
+matplotlib
+seaborn
+pyyaml

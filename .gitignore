@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project artifacts and local datasets
+data/
+features/
+results/
+checkpoints/
+runs/
+wandb/

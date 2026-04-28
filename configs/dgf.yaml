@@ -1,0 +1,30 @@
+model_name: dgf
+modalities:
+  text: true
+  audio: true
+  visual: true
+
+output_dim_text: 768
+output_dim_audio: 768
+output_dim_visual: 512
+
+d_model: 256
+projection_activation: relu
+projection_dropout: 0.3
+use_layernorm: true
+
+gate_hidden_dim: 128
+gate_dropout: 0.2
+num_classes: 7
+
+use_modality_dropout: false
+use_context: false
+
+optimizer: adamw
+learning_rate: 0.0001
+weight_decay: 0.0001
+batch_size_dialogue: 8
+max_epochs: 50
+early_stopping_patience: 5
+loss: weighted_cross_entropy
+seed: 42

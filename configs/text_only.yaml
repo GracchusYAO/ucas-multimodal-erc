@@ -1,0 +1,24 @@
+model_name: text_only
+modalities:
+  text: true
+  audio: false
+  visual: false
+
+text_model: FacebookAI/roberta-base
+text_pooling: mean
+max_length: 128
+batch_size_text: 32
+output_dim_text: 768
+
+projection_dim: 256
+dropout: 0.3
+num_classes: 7
+
+optimizer: adamw
+learning_rate: 0.0001
+weight_decay: 0.0001
+batch_size_dialogue: 8
+max_epochs: 50
+early_stopping_patience: 5
+loss: weighted_cross_entropy
+seed: 42
