@@ -181,13 +181,13 @@ Create `src/models/baselines.py`.
 
 ### 3.1 Text-only Baseline
 
-- [ ] Model: text feature -> projection MLP -> classifier.
-- [ ] Use this as the strongest simple baseline.
+- [x] Model: text feature -> projection MLP -> classifier.
+- [x] Use this as the strongest simple baseline.
 
 ### 3.2 Trimodal Concatenation Baseline
 
-- [ ] Model: concatenate text/audio/visual features -> MLP classifier.
-- [ ] Compare this against dynamic gated fusion.
+- [x] Model: concatenate text/audio/visual features -> MLP classifier.
+- [x] Compare this against dynamic gated fusion.
 
 Default baseline settings:
 
@@ -231,8 +231,8 @@ gate = softmax(MLP(concat([z_text, z_audio, z_visual])))
 z_fused = gate_text * z_text + gate_audio * z_audio + gate_visual * z_visual
 ```
 
-- [ ] Return both `z_fused` and `gate_weights`.
-- [ ] Save gate weights during evaluation for visualization.
+- [x] Return both `z_fused` and `gate_weights`.
+- [x] Save gate weights during evaluation for visualization.
 
 Default settings:
 
@@ -247,9 +247,9 @@ gate_dropout: 0.2         # [TUNE]
 
 Implement modality dropout inside the main model.
 
-- [ ] During training only, randomly mask one or more modalities.
-- [ ] Do not apply modality dropout during validation/test.
-- [ ] Start with moderate dropout to avoid hurting convergence.
+- [x] During training only, randomly mask one or more modalities.
+- [x] Do not apply modality dropout during validation/test.
+- [x] Start with moderate dropout to avoid hurting convergence.
 
 Default settings:
 
@@ -311,11 +311,11 @@ classifier_dropout: 0.3     # [TUNE]
 
 Create `src/train.py`.
 
-- [ ] Load cached text/audio/visual features.
-- [ ] Load labels and dialogue ids.
-- [ ] Batch by dialogue if using BiGRU context.
-- [ ] Support configs from YAML.
-- [ ] Use class-weighted cross entropy.
+- [x] Load cached text/audio/visual features.
+- [x] Load labels and dialogue ids.
+- [x] Batch by dialogue if using BiGRU context.
+- [x] Support configs from YAML.
+- [x] Use class-weighted cross entropy.
 
 Default settings:
 
@@ -327,10 +327,10 @@ batch_size_dialogue: 8    # [TUNE] number of dialogues per batch
 max_epochs: 50            # [TUNE]
 early_stopping_patience: 5
 loss: weighted_cross_entropy
-seed: 42
+seed: 114514
 ```
 
-- [ ] Save best checkpoint by validation weighted F1.
+- [x] Save best checkpoint by validation weighted F1.
 
 Output:
 
@@ -347,11 +347,11 @@ Create `src/evaluate.py`.
 
 Metrics:
 
-- [ ] Accuracy
-- [ ] Weighted F1
-- [ ] Macro F1
-- [ ] Per-class F1
-- [ ] Confusion matrix
+- [x] Accuracy
+- [x] Weighted F1
+- [x] Macro F1
+- [x] Per-class F1
+- [x] Confusion matrix
 
 Primary metrics:
 
@@ -375,11 +375,11 @@ Run these experiments in order.
 
 ### Stage A: Must-have baselines
 
-- [ ] E1: Text-only
-- [ ] E2: Text + Audio + Visual concat
-- [ ] E3: Dynamic Gated Fusion without context
-- [ ] E4: Dynamic Gated Fusion + Modality Dropout
-- [ ] E5: Full model = Dynamic Gated Fusion + Modality Dropout + BiGRU Context
+- [x] E1: Text-only
+- [x] E2: Text + Audio + Visual concat
+- [x] E3: Dynamic Gated Fusion without context
+- [x] E4: Dynamic Gated Fusion + Modality Dropout
+- [x] E5: Full model = Dynamic Gated Fusion + Modality Dropout + BiGRU Context
 
 ### Stage B: Optional but recommended
 
@@ -390,16 +390,27 @@ Run these experiments in order.
 - [ ] E10: Full model without modality dropout
 - [ ] E11: Full model without BiGRU context
 
+### Stage C: Stronger Text and Multimodal Extensions
+
+- [x] Fine-tune a text encoder instead of only training on frozen RoBERTa features.
+- [x] Add speaker-aware dialogue context text input.
+- [x] Add text fine-tune ensemble evaluation.
+- [ ] Rebuild audio features with a stronger speech encoder such as Whisper or HuBERT.
+- [ ] Rebuild visual features with face-centered frames or an expression-focused visual encoder.
+- [ ] Add audio-only and visual-only fine-tuned/strong-feature baselines before fusing again.
+- [ ] Add late-fusion logits baseline between strong text/audio/visual models.
+- [ ] Add quality-aware multimodal gating using missing-modality and modality-confidence signals.
+
 ---
 
 ## 10. Visualization and Analysis
 
 Create `src/visualize.py`.
 
-- [ ] Plot F1 comparison across experiments.
-- [ ] Plot confusion matrix.
-- [ ] Plot average modality gate weights by emotion class.
-- [ ] Plot performance under missing modality settings:
+- [x] Plot F1 comparison across experiments.
+- [x] Plot confusion matrix.
+- [x] Plot average modality gate weights by emotion class.
+- [x] Plot performance under missing modality settings:
   - no text
   - no audio
   - no visual
@@ -452,7 +463,7 @@ weight_decay: 1e-4
 batch_size_dialogue: 8
 max_epochs: 50
 early_stopping_patience: 5
-seed: 42
+seed: 114514
 ```
 
 ---
@@ -479,8 +490,8 @@ Recommended order for Codex:
 
 ## 13. Notes for Scope Control
 
-- Do not fine-tune RoBERTa/Wav2Vec2/CLIP in the first version.
-- Do not use VideoMAE in the first version.
-- Do not add face detection in the first version.
-- Focus on cached features, fusion design, context modeling, and ablation studies.
-- If time remains, compare CLIP visual features with VideoMAE visual features as an optional extension.
+- The first version used frozen features and DGF to establish the project pipeline.
+- The stronger version may fine-tune text encoders and rebuild audio/visual features.
+- Do not claim multimodal improvement unless audio-only or visual-only baselines show useful signal.
+- If frozen CLIP/Wav2Vec2 features remain noisy, prefer late fusion and quality-aware gating over blindly adding modalities.
+- If time remains, compare CLIP visual features with face-centered or VideoMAE-style visual features as an optional extension.

@@ -1,5 +1,6 @@
 torch
 transformers
+sentencepiece
 torchaudio
 librosa
 opencv-python

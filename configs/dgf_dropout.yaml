@@ -7,6 +7,7 @@ modalities:
 output_dim_text: 768
 output_dim_audio: 768
 output_dim_visual: 512
+batch_size_utterance: 64
 
 d_model: 256
 projection_activation: relu
@@ -31,4 +32,4 @@ batch_size_dialogue: 8
 max_epochs: 50
 early_stopping_patience: 5
 loss: weighted_cross_entropy
-seed: 42
+seed: 114514

@@ -1,7 +1,6 @@
 """MELD 数据读取工具。
 
-这个文件只做一件事：把官方 CSV 里的每条 utterance 读出来，并拼好对应
-视频路径。后续文本/音频/视觉特征提取都依赖这里返回的顺序。
+把官方 CSV 里的每条 utterance 读出来，并拼好对应视频路径。后续文本/音频/视觉特征提取都依赖这里返回的顺序。
 """
 
 from __future__ import annotations
@@ -46,8 +45,7 @@ MELD_SPLITS = tuple(MELD_METADATA)
 class MELDUtterance:
     """一条 MELD utterance。
 
-    注意：media_exists 不存在时也保留这条样本。dev 里官方缺了
-    dia110_utt7.mp4，后面音频/视觉特征用零向量处理即可。
+    注意：media_exists 不存在时也保留这条样本。dev 里官方缺了dia110_utt7.mp4，后面音频/视觉特征用零向量处理即可。
     """
 
     split: str
@@ -89,7 +87,7 @@ class MELDDialogue:
 
 
 def validate_split(split: str) -> str:
-    split = split.lower()
+    split = split.lower()  # 允许命令行传 Train/DEV 这类大小写混用
     if split not in MELD_METADATA:
         raise ValueError(f"Unknown split: {split}. Expected one of {MELD_SPLITS}.")
     return split
@@ -97,7 +95,7 @@ def validate_split(split: str) -> str:
 
 def get_meld_paths(data_root: str | Path = "data/meld") -> dict[str, dict[str, Path]]:
     """返回每个 split 的 CSV 路径和视频目录路径。"""
-    root = Path(data_root)
+    root = Path(data_root)  # data_root 默认就是 data/meld
     return {
         split: {
             "metadata": root / csv_name,
@@ -114,11 +112,11 @@ def expected_media_path(
     data_root: str | Path = "data/meld",
 ) -> Path:
     """按官方命名规则拼视频路径：dia{Dialogue_ID}_utt{Utterance_ID}.mp4。"""
-    split = validate_split(split)
+    split = validate_split(split)  # 先确认 split 名字合法
     return (
         Path(data_root)
-        / MELD_MEDIA_DIRS[split]
-        / f"dia{int(dialogue_id)}_utt{int(utterance_id)}.mp4"
+        / MELD_MEDIA_DIRS[split]  # 不同 split 的官方视频目录名不一样
+        / f"dia{int(dialogue_id)}_utt{int(utterance_id)}.mp4"  # 官方视频命名格式
     )
 
 
@@ -127,10 +125,10 @@ def load_meld_split(
     data_root: str | Path = "data/meld",
 ) -> list[MELDUtterance]:
     """读取一个 split，返回按 CSV 原顺序排列的 utterance 列表。"""
-    split = validate_split(split)
+    split = validate_split(split)  # 防止 split 拼错后读到奇怪路径
     root = Path(data_root)
-    csv_path = root / MELD_METADATA[split]
-    media_dir = root / MELD_MEDIA_DIRS[split]
+    csv_path = root / MELD_METADATA[split]  # 当前 split 对应的 CSV
+    media_dir = root / MELD_MEDIA_DIRS[split]  # 当前 split 对应的视频目录
 
     if not csv_path.exists():
         raise FileNotFoundError(f"Missing metadata CSV: {csv_path}")
@@ -140,12 +138,12 @@ def load_meld_split(
     utterances: list[MELDUtterance] = []
     with csv_path.open(newline="", encoding="utf-8-sig") as file:
         for row in csv.DictReader(file):
-            emotion = row["Emotion"].strip().lower()
+            emotion = row["Emotion"].strip().lower()  # 标签统一成小写，方便查表
             if emotion not in EMOTION2ID:
                 raise ValueError(f"Unknown emotion label: {emotion}")
 
-            dialogue_id = int(row["Dialogue_ID"])
-            utterance_id = int(row["Utterance_ID"])
+            dialogue_id = int(row["Dialogue_ID"])  # 保留官方 dialogue 编号
+            utterance_id = int(row["Utterance_ID"])  # dialogue 内第几句
             media_path = expected_media_path(split, dialogue_id, utterance_id, root)
 
             utterances.append(
@@ -157,14 +155,14 @@ def load_meld_split(
                     text=row["Utterance"],
                     speaker=row["Speaker"].strip(),
                     emotion=emotion,
-                    emotion_id=EMOTION2ID[emotion],
+                    emotion_id=EMOTION2ID[emotion],  # 训练 loss 用整数标签
                     sentiment=row["Sentiment"].strip().lower(),
                     season=int(row["Season"]),
                     episode=int(row["Episode"]),
                     start_time=row["StartTime"].strip(),
                     end_time=row["EndTime"].strip(),
                     media_path=media_path,
-                    media_exists=media_path.exists(),
+                    media_exists=media_path.exists(),  # 缺视频也不删样本，只打标记
                 )
             )
 
@@ -183,7 +181,7 @@ def group_by_dialogue(utterances: list[MELDUtterance]) -> list[MELDDialogue]:
     grouped: dict[tuple[str, int], list[MELDUtterance]] = defaultdict(list)
     for item in utterances:
         # 保留官方 Dialogue_ID，不重新编号。train 中 Dialogue_ID=60 本来就不存在。
-        grouped[(item.split, item.dialogue_id)].append(item)
+        grouped[(item.split, item.dialogue_id)].append(item)  # 同一个 dialogue 放一起
 
     dialogues: list[MELDDialogue] = []
     for (split, dialogue_id), items in grouped.items():
@@ -191,7 +189,7 @@ def group_by_dialogue(utterances: list[MELDUtterance]) -> list[MELDDialogue]:
             MELDDialogue(
                 split=split,
                 dialogue_id=dialogue_id,
-                utterances=tuple(sorted(items, key=lambda x: x.utterance_id)),
+                utterances=tuple(sorted(items, key=lambda x: x.utterance_id)),  # 保证上下文顺序
             )
         )
     return sorted(dialogues, key=lambda x: x.dialogue_id)
@@ -204,14 +202,14 @@ def summarize_split(split: str, data_root: str | Path = "data/meld") -> dict[str
     utterances = load_meld_split(split, root)
     dialogues = group_by_dialogue(utterances)
 
-    expected_media = {item.media_filename for item in utterances}
+    expected_media = {item.media_filename for item in utterances}  # CSV 理论上需要的视频
     actual_media = {
         path.name
         for path in (root / MELD_MEDIA_DIRS[split]).glob("*.mp4")
-        if not path.name.startswith("._")
+        if not path.name.startswith("._")  # 忽略 macOS 解压可能带出来的隐藏文件
     }
 
-    dialogue_ids = sorted({dialogue.dialogue_id for dialogue in dialogues})
+    dialogue_ids = sorted({dialogue.dialogue_id for dialogue in dialogues})  # 用来检查编号缺口
     gaps = [
         item
         for item in range(dialogue_ids[0], dialogue_ids[-1] + 1)

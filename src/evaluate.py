@@ -1,8 +1,317 @@
-"""Evaluation entrypoint for MELD emotion recognition experiments."""
+"""评估缓存特征上的 MELD 模型。"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import os
+from pathlib import Path
+
+import torch
+
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")  # 避免默认 ~/.config 不可写的 warning
+
+import matplotlib
+
+matplotlib.use("Agg")
+
+import matplotlib.pyplot as plt
+import yaml
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix,
+    f1_score,
+)
+
+from src.dataset import ID2EMOTION, MELD_SPLITS
+from src.feature_dataset import make_dialogue_loader, make_feature_loader
+from src.models import build_model
+from src.train import active_modalities, choose_device, set_seed
+
+
+LABEL_IDS = list(range(len(ID2EMOTION)))
+LABEL_NAMES = [ID2EMOTION[index] for index in LABEL_IDS]
+GATED_MODELS = {"dgf", "dgf_dropout", "dgf_context"}
+
+
+def load_config(path: str | Path) -> dict:
+    with Path(path).open(encoding="utf-8") as file:
+        return yaml.safe_load(file) or {}
+
+
+def flatten_keys(batch: dict, use_context: bool) -> list[str]:
+    """把普通 batch 或 dialogue batch 的 key 拉平成 utterance 级列表。"""
+    if not use_context:
+        return list(batch["key"])
+
+    keys = []
+    mask = batch["mask"]
+    for row, dialogue_keys in enumerate(batch["key"]):
+        length = int(mask[row].sum().item())
+        keys.extend(dialogue_keys[:length])
+    return keys
+
+
+@torch.no_grad()
+def collect_predictions(
+    model: torch.nn.Module,
+    loader,
+    modalities: tuple[str, ...],
+    use_context: bool,
+    device: torch.device,
+    collect_gates: bool = False,
+    zero_modalities: tuple[str, ...] = (),
+) -> tuple[list[int], list[int], list[str], list[list[float]]]:
+    model.eval()
+    predictions: list[int] = []
+    gold_labels: list[int] = []
+    keys: list[str] = []
+    gate_weights: list[list[float]] = []
+
+    for batch in loader:
+        labels = batch["label"].to(device)
+        mask = batch["mask"].to(device) if use_context else None
+        inputs = []
+        for modality in modalities:
+            feature = batch[modality].to(device)
+            if modality in zero_modalities:
+                feature = torch.zeros_like(feature)  # 评估缺失模态时，直接把该模态置零
+            inputs.append(feature)
+
+        if collect_gates:
+            text, audio, visual = inputs
+            if use_context:
+                logits, gates = model(text, audio, visual, mask=mask, return_gate=True)
+            else:
+                logits, gates = model(text, audio, visual, return_gate=True)
+        else:
+            if use_context:
+                logits = model(*inputs, mask=mask)
+            else:
+                logits = model(*inputs)
+            gates = None
+
+        if mask is None:
+            valid_logits = logits
+            valid_labels = labels
+            valid_gates = gates
+        else:
+            valid_logits = logits[mask]  # 只评估真实 utterance，不评估 padding
+            valid_labels = labels[mask]
+            valid_gates = gates[mask] if gates is not None else None
+
+        predictions.extend(valid_logits.argmax(dim=1).cpu().tolist())
+        gold_labels.extend(valid_labels.cpu().tolist())
+        keys.extend(flatten_keys(batch, use_context))
+        if valid_gates is not None:
+            gate_weights.extend(valid_gates.cpu().tolist())
+
+    return gold_labels, predictions, keys, gate_weights
+
+
+def build_metrics(gold_labels: list[int], predictions: list[int]) -> dict:
+    report = classification_report(
+        gold_labels,
+        predictions,
+        labels=LABEL_IDS,
+        target_names=LABEL_NAMES,
+        output_dict=True,
+        zero_division=0,
+    )
+    return {
+        "accuracy": accuracy_score(gold_labels, predictions),
+        "weighted_f1": f1_score(gold_labels, predictions, average="weighted", zero_division=0),
+        "macro_f1": f1_score(gold_labels, predictions, average="macro", zero_division=0),
+        "per_class": {
+            name: {
+                "precision": report[name]["precision"],
+                "recall": report[name]["recall"],
+                "f1": report[name]["f1-score"],
+                "support": report[name]["support"],
+            }
+            for name in LABEL_NAMES
+        },
+    }
+
+
+def save_predictions(
+    path: Path,
+    keys: list[str],
+    gold_labels: list[int],
+    predictions: list[int],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as file:
+        writer = csv.writer(file)
+        writer.writerow(["key", "gold_id", "gold", "pred_id", "pred", "correct"])
+        for key, gold, pred in zip(keys, gold_labels, predictions):
+            writer.writerow([key, gold, ID2EMOTION[gold], pred, ID2EMOTION[pred], int(gold == pred)])
+
+
+def save_gate_weights(
+    path: Path,
+    keys: list[str],
+    gold_labels: list[int],
+    predictions: list[int],
+    gate_weights: list[list[float]],
+) -> None:
+    """保存每条 utterance 的 text/audio/visual gate，后面画图和分析会用。"""
+    if not gate_weights:
+        return
+
+    with path.open("w", newline="", encoding="utf-8") as file:
+        writer = csv.writer(file)
+        writer.writerow(
+            [
+                "key",
+                "gold_id",
+                "gold",
+                "pred_id",
+                "pred",
+                "correct",
+                "gate_text",
+                "gate_audio",
+                "gate_visual",
+            ]
+        )
+        for key, gold, pred, gates in zip(keys, gold_labels, predictions, gate_weights):
+            writer.writerow(
+                [
+                    key,
+                    gold,
+                    ID2EMOTION[gold],
+                    pred,
+                    ID2EMOTION[pred],
+                    int(gold == pred),
+                    gates[0],
+                    gates[1],
+                    gates[2],
+                ]
+            )
+
+
+def save_confusion_matrix(output_dir: Path, gold_labels: list[int], predictions: list[int]) -> None:
+    matrix = confusion_matrix(gold_labels, predictions, labels=LABEL_IDS)
+
+    csv_path = output_dir / "confusion_matrix.csv"
+    with csv_path.open("w", newline="", encoding="utf-8") as file:
+        writer = csv.writer(file)
+        writer.writerow(["gold\\pred", *LABEL_NAMES])
+        for name, row in zip(LABEL_NAMES, matrix):
+            writer.writerow([name, *row.tolist()])
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    image = ax.imshow(matrix, cmap="Blues")
+    fig.colorbar(image, ax=ax)
+    ax.set_xticks(range(len(LABEL_NAMES)), labels=LABEL_NAMES, rotation=45, ha="right")
+    ax.set_yticks(range(len(LABEL_NAMES)), labels=LABEL_NAMES)
+    for row in range(matrix.shape[0]):
+        for col in range(matrix.shape[1]):
+            ax.text(col, row, int(matrix[row, col]), ha="center", va="center", fontsize=8)
+    plt.xlabel("Predicted")
+    plt.ylabel("Gold")
+    plt.tight_layout()
+    plt.savefig(output_dir / "confusion_matrix.png", dpi=200)
+    plt.close()
+
+
+def evaluate_checkpoint(args: argparse.Namespace) -> dict:
+    config = load_config(args.config)
+    checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+    model_name = config.get("model_name", checkpoint.get("model_name", "model"))
+    use_context = bool(config.get("use_context", False))
+    modalities = active_modalities(config)
+    collect_gates = (
+        not args.no_save_gates
+        and model_name in GATED_MODELS
+        and set(modalities) == {"text", "audio", "visual"}
+    )
+    zero_modalities = tuple(args.zero_modality or [])
+
+    seed = int(config.get("seed", 114514))
+    set_seed(seed)
+    device = choose_device(args.device)
+
+    batch_size = args.batch_size or int(
+        config.get("batch_size_utterance", config.get("batch_size_dialogue", 64))
+    )
+    loader_fn = make_dialogue_loader if use_context else make_feature_loader
+    loader = loader_fn(
+        args.split,
+        modalities=modalities,
+        features_root=args.features_root,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+    )
+
+    model = build_model(config).to(device)
+    model.load_state_dict(checkpoint["model_state_dict"])
+
+    gold_labels, predictions, keys, gate_weights = collect_predictions(
+        model,
+        loader,
+        modalities,
+        use_context,
+        device,
+        collect_gates=collect_gates,
+        zero_modalities=zero_modalities,
+    )
+    metrics = build_metrics(gold_labels, predictions)
+
+    output_dir = Path(args.output_dir or f"results/evaluate/{model_name}_{args.split}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    metrics_with_meta = {
+        "model_name": model_name,
+        "split": args.split,
+        "checkpoint": str(args.checkpoint),
+        "checkpoint_epoch": checkpoint.get("epoch"),
+        "zero_modalities": zero_modalities,
+        "dev_metrics": checkpoint.get("dev_metrics"),
+        **metrics,
+    }
+
+    with (output_dir / "metrics.json").open("w", encoding="utf-8") as file:
+        json.dump(metrics_with_meta, file, indent=2)
+    save_predictions(output_dir / "predictions.csv", keys, gold_labels, predictions)
+    save_confusion_matrix(output_dir, gold_labels, predictions)
+    save_gate_weights(output_dir / "gate_weights.csv", keys, gold_labels, predictions, gate_weights)
+
+    print(
+        f"{model_name} {args.split}: "
+        f"accuracy={metrics['accuracy']:.4f} "
+        f"weighted_f1={metrics['weighted_f1']:.4f} "
+        f"macro_f1={metrics['macro_f1']:.4f}"
+    )
+    if zero_modalities:
+        print(f"zero_modalities={zero_modalities}")
+    print(f"saved {output_dir}")
+    if gate_weights:
+        print(f"saved gate weights: {output_dir / 'gate_weights.csv'}")
+    return metrics_with_meta
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Evaluate MELD model checkpoints.")
+    parser.add_argument("--config", required=True)
+    parser.add_argument("--checkpoint", required=True)
+    parser.add_argument("--split", default="test", choices=MELD_SPLITS)
+    parser.add_argument("--features-root", default="features")
+    parser.add_argument("--output-dir")
+    parser.add_argument("--device")
+    parser.add_argument("--batch-size", type=int)
+    parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--no-save-gates", action="store_true")
+    parser.add_argument("--zero-modality", action="append", choices=("text", "audio", "visual"))
+    return parser.parse_args()
 
 
 def main() -> None:
-    raise NotImplementedError("Evaluation pipeline is not implemented yet.")
+    args = parse_args()
+    evaluate_checkpoint(args)
 
 
 if __name__ == "__main__":

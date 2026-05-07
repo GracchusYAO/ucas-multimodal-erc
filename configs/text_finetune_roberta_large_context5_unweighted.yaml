@@ -1,0 +1,26 @@
+model_name: text_finetune_roberta_large_context5_unweighted
+
+text_model: FacebookAI/roberta-large
+local_files_only: true
+pooling: cls
+max_length: 320
+context_window: 5
+include_speaker: true
+num_classes: 7
+
+dropout: 0.3
+batch_size: 2
+max_epochs: 6
+early_stopping_patience: 2
+
+optimizer: adamw
+encoder_lr: 0.000006
+classifier_lr: 0.00008
+weight_decay: 0.01
+warmup_ratio: 0.1
+gradient_accumulation_steps: 4
+max_grad_norm: 1.0
+mixed_precision: true
+loss: cross_entropy
+seed: 114514
+eval_test: true
