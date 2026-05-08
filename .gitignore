@@ -225,3 +225,4 @@ results/
 checkpoints/
 runs/
 wandb/
+.torch_cache/

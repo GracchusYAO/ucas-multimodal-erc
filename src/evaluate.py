@@ -8,6 +8,16 @@ import json
 import os
 from pathlib import Path
 
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix,
+    f1_score,
+)
+from src.torch_import_patch import patch_inspect_for_torch
+
+patch_inspect_for_torch()
+
 import torch
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")  # 避免默认 ~/.config 不可写的 warning
@@ -18,12 +28,6 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 import yaml
-from sklearn.metrics import (
-    accuracy_score,
-    classification_report,
-    confusion_matrix,
-    f1_score,
-)
 
 from src.dataset import ID2EMOTION, MELD_SPLITS
 from src.feature_dataset import make_dialogue_loader, make_feature_loader
@@ -33,7 +37,7 @@ from src.train import active_modalities, choose_device, set_seed
 
 LABEL_IDS = list(range(len(ID2EMOTION)))
 LABEL_NAMES = [ID2EMOTION[index] for index in LABEL_IDS]
-GATED_MODELS = {"dgf", "dgf_dropout", "dgf_context"}
+GATED_MODELS = {"dgf", "dgf_dropout", "dgf_context", "late_fusion_hubert"}
 
 
 def load_config(path: str | Path) -> dict:
@@ -226,7 +230,7 @@ def evaluate_checkpoint(args: argparse.Namespace) -> dict:
     collect_gates = (
         not args.no_save_gates
         and model_name in GATED_MODELS
-        and set(modalities) == {"text", "audio", "visual"}
+        and len(modalities) == 3
     )
     zero_modalities = tuple(args.zero_modality or [])
 
@@ -305,7 +309,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--no-save-gates", action="store_true")
-    parser.add_argument("--zero-modality", action="append", choices=("text", "audio", "visual"))
+    parser.add_argument("--zero-modality", action="append", choices=("text", "audio", "audio_hubert", "visual"))
     return parser.parse_args()
 
 

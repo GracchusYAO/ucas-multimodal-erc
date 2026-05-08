@@ -1,0 +1,20 @@
+model_name: audio_only
+modalities:
+  text: false
+  audio: true
+  visual: false
+
+output_dim_audio: 768
+batch_size_utterance: 64
+
+projection_dim: 256
+dropout: 0.3
+num_classes: 7
+
+optimizer: adamw
+learning_rate: 0.0001
+weight_decay: 0.0001
+max_epochs: 50
+early_stopping_patience: 5
+loss: weighted_cross_entropy
+seed: 114514

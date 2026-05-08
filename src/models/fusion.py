@@ -111,6 +111,65 @@ class DynamicGatedFusionClassifier(nn.Module):
         return logits
 
 
+class LateFusionHubertClassifier(nn.Module):
+    """Late fusion：text / HuBERT-audio / visual 各自预测，再学习加权融合。"""
+
+    def __init__(
+        self,
+        text_dim: int = 768,
+        audio_hubert_dim: int = 768,
+        visual_dim: int = 512,
+        d_model: int = 256,
+        projection_dropout: float = 0.3,
+        use_layernorm: bool = True,
+        gate_hidden_dim: int = 128,
+        gate_dropout: float = 0.2,
+        num_classes: int = 7,
+    ) -> None:
+        super().__init__()
+        self.text_proj = make_projection(text_dim, d_model, projection_dropout, use_layernorm)
+        self.audio_proj = make_projection(audio_hubert_dim, d_model, projection_dropout, use_layernorm)
+        self.visual_proj = make_projection(visual_dim, d_model, projection_dropout, use_layernorm)
+
+        self.text_head = nn.Linear(d_model, num_classes)  # 文本单独给出一组 logits
+        self.audio_head = nn.Linear(d_model, num_classes)  # HuBERT 音频单独给出一组 logits
+        self.visual_head = nn.Linear(d_model, num_classes)  # CLIP 视觉单独给出一组 logits
+
+        self.gate = nn.Sequential(
+            nn.Linear(d_model * 3, gate_hidden_dim),  # 根据三路表示判断每个模态可信度
+            nn.ReLU(),
+            nn.Dropout(gate_dropout),
+            nn.Linear(gate_hidden_dim, 3),
+        )
+
+    def forward(
+        self,
+        text: torch.Tensor,
+        audio_hubert: torch.Tensor,
+        visual: torch.Tensor,
+        return_gate: bool = False,
+    ):
+        z_text = self.text_proj(text.float())
+        z_audio = self.audio_proj(audio_hubert.float())
+        z_visual = self.visual_proj(visual.float())
+
+        logits = torch.stack(
+            [
+                self.text_head(z_text),
+                self.audio_head(z_audio),
+                self.visual_head(z_visual),
+            ],
+            dim=1,
+        )  # [B, 3, num_classes]
+
+        gate_input = torch.cat([z_text, z_audio, z_visual], dim=1)
+        gate_weights = torch.softmax(self.gate(gate_input), dim=1)  # [B, 3]
+        fused_logits = (logits * gate_weights.unsqueeze(-1)).sum(dim=1)
+        if return_gate:
+            return fused_logits, gate_weights
+        return fused_logits
+
+
 def build_dgf_model(config: dict | None = None) -> DynamicGatedFusionClassifier:
     """按 YAML 配置构造 DGF 模型。"""
     config = config or {}
@@ -129,4 +188,20 @@ def build_dgf_model(config: dict | None = None) -> DynamicGatedFusionClassifier:
         drop_text_p=float(config.get("drop_text_p", 0.1)),
         drop_audio_p=float(config.get("drop_audio_p", 0.2)),
         drop_visual_p=float(config.get("drop_visual_p", 0.2)),
+    )
+
+
+def build_late_fusion_hubert_model(config: dict | None = None) -> LateFusionHubertClassifier:
+    """按 YAML 配置构造 text + HuBERT-audio + visual late fusion。"""
+    config = config or {}
+    return LateFusionHubertClassifier(
+        text_dim=int(config.get("output_dim_text", 768)),
+        audio_hubert_dim=int(config.get("output_dim_audio_hubert", 768)),
+        visual_dim=int(config.get("output_dim_visual", 512)),
+        d_model=int(config.get("d_model", 256)),
+        projection_dropout=float(config.get("projection_dropout", 0.3)),
+        use_layernorm=bool(config.get("use_layernorm", True)),
+        gate_hidden_dim=int(config.get("gate_hidden_dim", 128)),
+        gate_dropout=float(config.get("gate_dropout", 0.2)),
+        num_classes=int(config.get("num_classes", 7)),
     )

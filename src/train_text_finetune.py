@@ -16,14 +16,26 @@ from contextlib import nullcontext
 from pathlib import Path
 
 os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")  # 当前环境里 torch._dynamo 偶发导入异常
+os.environ.setdefault("TORCH_COMPILE_DISABLE", "1")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
+from src.torch_import_patch import patch_inspect_for_torch, restore_common_builtins, stub_torch_dynamo
+
+restore_common_builtins()
+patch_inspect_for_torch()
+
 import torch
+
+restore_common_builtins()
+
 import yaml
 from sklearn.metrics import accuracy_score, f1_score
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 from transformers import AutoModel, AutoTokenizer, get_linear_schedule_with_warmup
+
+restore_common_builtins()
+stub_torch_dynamo(torch)
 
 from src.dataset import ID2EMOTION, MELDUtterance, load_meld_split
 

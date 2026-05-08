@@ -17,10 +17,30 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 
-MODEL_ORDER = ["text_only", "concat_tav", "dgf", "dgf_dropout", "dgf_context"]
+MODEL_ORDER = [
+    "audio_only",
+    "audio_hubert_only",
+    "visual_only",
+    "text_only",
+    "text_audio",
+    "text_audio_hubert",
+    "text_visual",
+    "concat_tav",
+    "late_fusion_hubert",
+    "dgf",
+    "dgf_dropout",
+    "dgf_context",
+]
 MODEL_NAMES = {
+    "audio_only": "Audio",
+    "audio_hubert_only": "HuBERT",
+    "visual_only": "Visual",
     "text_only": "Text",
+    "text_audio": "Text+Audio",
+    "text_audio_hubert": "Text+HuBERT",
+    "text_visual": "Text+Visual",
     "concat_tav": "Concat",
+    "late_fusion_hubert": "LateFusion",
     "dgf": "DGF",
     "dgf_dropout": "DGF+Drop",
     "dgf_context": "DGF+Ctx",

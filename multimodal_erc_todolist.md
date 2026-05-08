@@ -383,10 +383,10 @@ Run these experiments in order.
 
 ### Stage B: Optional but recommended
 
-- [ ] E6: Audio-only
-- [ ] E7: Visual-only
-- [ ] E8: Text + Audio
-- [ ] E9: Text + Visual
+- [x] E6: Audio-only
+- [x] E7: Visual-only
+- [x] E8: Text + Audio
+- [x] E9: Text + Visual
 - [ ] E10: Full model without modality dropout
 - [ ] E11: Full model without BiGRU context
 
@@ -395,10 +395,12 @@ Run these experiments in order.
 - [x] Fine-tune a text encoder instead of only training on frozen RoBERTa features.
 - [x] Add speaker-aware dialogue context text input.
 - [x] Add text fine-tune ensemble evaluation.
-- [ ] Rebuild audio features with a stronger speech encoder such as Whisper or HuBERT.
+- [x] Add frozen-feature audio-only and visual-only baselines.
+- [x] Rebuild audio features with a stronger speech encoder such as Whisper or HuBERT.
 - [ ] Rebuild visual features with face-centered frames or an expression-focused visual encoder.
-- [ ] Add audio-only and visual-only fine-tuned/strong-feature baselines before fusing again.
-- [ ] Add late-fusion logits baseline between strong text/audio/visual models.
+- [x] Add audio-only strong-feature baseline before fusing again.
+- [ ] Add visual-only fine-tuned/strong-feature baseline before fusing again.
+- [x] Add late-fusion logits baseline between strong text/audio/visual models.
 - [ ] Add quality-aware multimodal gating using missing-modality and modality-confidence signals.
 
 ---

@@ -7,13 +7,28 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import random
 from pathlib import Path
 
-import torch
-import yaml
+os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")  # 当前 WSL/conda 环境里 dynamo 导入不稳定
+os.environ.setdefault("TORCH_COMPILE_DISABLE", "1")
+
 from sklearn.metrics import accuracy_score, f1_score
+from src.torch_import_patch import patch_inspect_for_torch, restore_common_builtins, stub_torch_dynamo
+
+restore_common_builtins()
+patch_inspect_for_torch()
+
+import torch
+
+restore_common_builtins()
+
+import yaml
 from torch import nn
+
+restore_common_builtins()
+stub_torch_dynamo(torch)
 
 from src.feature_dataset import make_dialogue_loader, make_feature_loader
 from src.models import build_model
@@ -47,7 +62,8 @@ def class_weights(labels: torch.Tensor, num_classes: int) -> torch.Tensor:
 def active_modalities(config: dict) -> tuple[str, ...]:
     """从 config 里读出当前模型使用哪些模态。"""
     enabled = config.get("modalities", {"text": True})
-    return tuple(name for name in ("text", "audio", "visual") if enabled.get(name, False))
+    names = ("text", "audio", "audio_hubert", "visual")
+    return tuple(name for name in names if enabled.get(name, False))
 
 
 def forward_batch(
@@ -58,7 +74,7 @@ def forward_batch(
     use_context: bool,
 ) -> torch.Tensor:
     """把 batch 中需要的模态取出来，按顺序喂给模型。"""
-    inputs = [batch[modality].to(device) for modality in modalities]  # text/audio/visual
+    inputs = [batch[modality].to(device) for modality in modalities]  # 按 config 顺序取模态特征
     if use_context:
         return model(*inputs, mask=batch["mask"].to(device))  # dialogue batch 需要 mask
     return model(*inputs)

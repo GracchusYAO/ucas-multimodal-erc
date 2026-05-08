@@ -18,6 +18,7 @@ from src.dataset import MELD_SPLITS, validate_split
 MODALITY_DIRS = {
     "text": "text_roberta",
     "audio": "audio_wav2vec2",
+    "audio_hubert": "audio_hubert",
     "visual": "visual_clip",
 }
 

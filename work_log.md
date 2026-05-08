@@ -604,3 +604,197 @@ Multimodal plan from here:
 - Try late fusion over strong unimodal logits before returning to DGF, because the current feature-level fusion lets noisy modalities hurt the text branch.
 - Add quality-aware gating: missing media flags, audio/visual availability, and possibly per-modality confidence should influence fusion weights.
 - Consider multimodal distillation where the strong text ensemble acts as a teacher and audio/visual branches are trained to add complementary evidence rather than override text.
+
+## 2026-05-07: Audio-only and Visual-only Baselines
+
+Implemented and ran the first unimodal checks for the non-text branches.
+
+Main code changes:
+
+- Added `AudioOnlyClassifier` and `VisualOnlyClassifier` in `src/models/baselines.py`.
+- Added `TextAudioClassifier`, `TextVisualClassifier`, and a shared `ConcatClassifier` for two- or three-modality concat baselines.
+- Reused the same single-modality MLP shape as the frozen text baseline, so the comparison stays fair.
+- Registered `audio_only` and `visual_only` in `src/models/__init__.py`.
+- Added `configs/audio_only.yaml`, `configs/visual_only.yaml`, `configs/text_audio.yaml`, and `configs/text_visual.yaml`.
+- Updated `src/visualize.py` so the comparison plot includes the new unimodal and two-modality baselines.
+- Adjusted `src/train.py` and `src/evaluate.py` import order to avoid one observed non-sandbox GPU import failure mode where `torch` was loaded before `sklearn/scipy`.
+- Added `src/torch_import_patch.py` and disabled torch compile/dynamo in training scripts because this WSL/conda environment occasionally fails inside PyTorch import-time source inspection.
+
+Training commands:
+
+```text
+conda run -n workspace python -u -m src.train --config configs/audio_only.yaml --device cuda --output-dir results/audio_only --checkpoint-dir checkpoints/audio_only 2>&1 | tee logs/train_audio_only.log
+conda run -n workspace python -u -m src.train --config configs/visual_only.yaml --device cuda --output-dir results/visual_only --checkpoint-dir checkpoints/visual_only 2>&1 | tee logs/train_visual_only.log
+/home/gracchus/miniconda3/envs/workspace/bin/python -u -m src.train --config configs/text_audio.yaml --device cpu --output-dir results/text_audio --checkpoint-dir checkpoints/text_audio 2>&1 | tee logs/train_text_audio.log
+/home/gracchus/miniconda3/envs/workspace/bin/python -u -m src.train --config configs/text_visual.yaml --device cpu --output-dir results/text_visual --checkpoint-dir checkpoints/text_visual 2>&1 | tee logs/train_text_visual.log
+```
+
+The two-modality concat models were trained on CPU because the non-sandbox `conda run` path became unstable inside Python/conda import code during this session. These models are small MLPs over cached features, so CPU/GPU only changes speed, not the selected metrics.
+
+Dev results:
+
+```text
+audio_only    best_epoch=1   accuracy=0.2245  weighted_f1=0.2267  macro_f1=0.1500
+visual_only   best_epoch=10  accuracy=0.2624  weighted_f1=0.2696  macro_f1=0.2052
+text_audio    best_epoch=25  accuracy=0.5302  weighted_f1=0.5507  macro_f1=0.4170
+text_visual   best_epoch=7   accuracy=0.4977  weighted_f1=0.5174  macro_f1=0.3824
+```
+
+Test evaluation commands:
+
+```text
+/home/gracchus/miniconda3/envs/workspace/bin/python -u -m src.evaluate --config configs/audio_only.yaml --checkpoint checkpoints/audio_only/best_audio_only.pt --split test --device cpu --output-dir results/evaluate/audio_only_test 2>&1 | tee logs/evaluate_audio_only_test.log
+/home/gracchus/miniconda3/envs/workspace/bin/python -u -m src.evaluate --config configs/visual_only.yaml --checkpoint checkpoints/visual_only/best_visual_only.pt --split test --device cpu --output-dir results/evaluate/visual_only_test 2>&1 | tee logs/evaluate_visual_only_test.log
+/home/gracchus/miniconda3/envs/workspace/bin/python -u -m src.evaluate --config configs/text_audio.yaml --checkpoint checkpoints/text_audio/best_text_audio.pt --split test --device cpu --output-dir results/evaluate/text_audio_test 2>&1 | tee logs/evaluate_text_audio_test.log
+/home/gracchus/miniconda3/envs/workspace/bin/python -u -m src.evaluate --config configs/text_visual.yaml --checkpoint checkpoints/text_visual/best_text_visual.pt --split test --device cpu --output-dir results/evaluate/text_visual_test 2>&1 | tee logs/evaluate_text_visual_test.log
+/home/gracchus/miniconda3/envs/workspace/bin/python -u -m src.visualize --best-model dgf_dropout 2>&1 | tee logs/visualize_test.log
+```
+
+Test results:
+
+```text
+audio_only    accuracy=0.2180  weighted_f1=0.2337  macro_f1=0.1585
+visual_only   accuracy=0.2502  weighted_f1=0.2724  macro_f1=0.1807
+text_audio    accuracy=0.5544  weighted_f1=0.5768  macro_f1=0.4196
+text_visual   accuracy=0.5222  weighted_f1=0.5489  macro_f1=0.4000
+```
+
+Conclusion:
+
+The frozen Wav2Vec2 mean-pooled audio branch and uniform-frame CLIP visual branch are both very weak on their own. `text_audio` is close to the old frozen `text_only` baseline, but still below `concat_tav` and far below the fine-tuned text models. `text_visual` is weaker. This supports the previous missing-modality result: current audio/visual features are too noisy to improve the strong text model through simple feature-level fusion.
+
+Next multimodal step:
+
+- Rebuild audio features with a stronger speech/emotion encoder or better temporal pooling.
+- Rebuild visual features using face-centered or expression-focused features.
+- Only after stronger audio/visual baselines exist, try late fusion or quality-aware fusion again.
+
+## 2026-05-07: HuBERT Audio Features
+
+Implemented a stronger audio-feature branch using `torchaudio.pipelines.HUBERT_BASE`. These features are saved separately under `features/audio_hubert/`, so the old Wav2Vec2 features remain available for ablation.
+
+Main code changes:
+
+- Added `src/extract_audio_hubert_features.py` for HuBERT utterance-level audio extraction.
+- Added `configs/audio_hubert_only.yaml` and `configs/text_audio_hubert.yaml`.
+- Added `audio_hubert` loading support in `src/feature_dataset.py`.
+- Added `AudioHubertOnlyClassifier` and `TextAudioHubertClassifier` in `src/models/baselines.py`.
+- Added HuBERT models to training, evaluation, and visualization registration.
+- Added `.torch_cache/` to `.gitignore` because HuBERT weights should not be pushed to Git.
+
+GPU environment note:
+
+The normal sandbox Python path cannot see CUDA in this WSL/container session. The stable GPU command path is the clean environment below, which sees the local RTX 4080 SUPER:
+
+```text
+env -i HOME=/home/gracchus PATH=/home/gracchus/miniconda3/envs/workspace/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/lib/wsl/lib LANG=C.UTF-8 LC_ALL=C.UTF-8 TORCH_HOME=/home/gracchus/code/ucas-multimodal-erc/.torch_cache /home/gracchus/miniconda3/envs/workspace/bin/python ...
+```
+
+HuBERT weight download:
+
+```text
+curl -L --fail --retry 3 https://download.pytorch.org/torchaudio/models/hubert_fairseq_base_ls960.pth -o .torch_cache/hub/checkpoints/hubert_fairseq_base_ls960.pth 2>&1 | tee logs/download_hubert_base.log
+```
+
+Feature extraction commands:
+
+```text
+env -i HOME=/home/gracchus PATH=/home/gracchus/miniconda3/envs/workspace/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/lib/wsl/lib LANG=C.UTF-8 LC_ALL=C.UTF-8 TORCH_HOME=/home/gracchus/code/ucas-multimodal-erc/.torch_cache /home/gracchus/miniconda3/envs/workspace/bin/python -u -m src.extract_audio_hubert_features --config configs/audio_hubert_only.yaml --split dev --device cuda --force 2>&1 | tee logs/extract_audio_hubert_dev_gpu.log
+env -i HOME=/home/gracchus PATH=/home/gracchus/miniconda3/envs/workspace/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/lib/wsl/lib LANG=C.UTF-8 LC_ALL=C.UTF-8 TORCH_HOME=/home/gracchus/code/ucas-multimodal-erc/.torch_cache /home/gracchus/miniconda3/envs/workspace/bin/python -u -m src.extract_audio_hubert_features --config configs/audio_hubert_only.yaml --split train --device cuda --batch-size 16 --force 2>&1 | tee logs/extract_audio_hubert_train_gpu.log
+env -i HOME=/home/gracchus PATH=/home/gracchus/miniconda3/envs/workspace/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/lib/wsl/lib LANG=C.UTF-8 LC_ALL=C.UTF-8 TORCH_HOME=/home/gracchus/code/ucas-multimodal-erc/.torch_cache /home/gracchus/miniconda3/envs/workspace/bin/python -u -m src.extract_audio_hubert_features --config configs/audio_hubert_only.yaml --split test --device cuda --batch-size 16 --force 2>&1 | tee logs/extract_audio_hubert_test_gpu.log
+```
+
+Feature extraction status:
+
+```text
+train: features/audio_hubert/train.pt  shape=(9989, 768)  available=9988
+dev:   features/audio_hubert/dev.pt    shape=(1109, 768)  available=1108
+test:  features/audio_hubert/test.pt   shape=(2610, 768)  available=2610
+```
+
+Known unavailable examples:
+
+- `dev:dia110_utt7` is still missing because the official MELD package does not contain that dev video.
+- `train:dia125_utt3` failed audio decoding and is kept as a zero-vector placeholder.
+
+Training commands:
+
+```text
+env -i HOME=/home/gracchus PATH=/home/gracchus/miniconda3/envs/workspace/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/lib/wsl/lib LANG=C.UTF-8 LC_ALL=C.UTF-8 TORCH_HOME=/home/gracchus/code/ucas-multimodal-erc/.torch_cache /home/gracchus/miniconda3/envs/workspace/bin/python -u -m src.train --config configs/audio_hubert_only.yaml --device cuda --output-dir results/audio_hubert_only --checkpoint-dir checkpoints/audio_hubert_only 2>&1 | tee logs/train_audio_hubert_only.log
+env -i HOME=/home/gracchus PATH=/home/gracchus/miniconda3/envs/workspace/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/lib/wsl/lib LANG=C.UTF-8 LC_ALL=C.UTF-8 TORCH_HOME=/home/gracchus/code/ucas-multimodal-erc/.torch_cache /home/gracchus/miniconda3/envs/workspace/bin/python -u -m src.train --config configs/text_audio_hubert.yaml --device cuda --output-dir results/text_audio_hubert --checkpoint-dir checkpoints/text_audio_hubert 2>&1 | tee logs/train_text_audio_hubert.log
+```
+
+Dev results:
+
+```text
+audio_hubert_only  best_epoch=18  weighted_f1=0.3142  macro_f1=0.2452
+text_audio_hubert  best_epoch=25  weighted_f1=0.5640  macro_f1=0.4282
+```
+
+Test evaluation commands:
+
+```text
+env -i HOME=/home/gracchus PATH=/home/gracchus/miniconda3/envs/workspace/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/lib/wsl/lib LANG=C.UTF-8 LC_ALL=C.UTF-8 TORCH_HOME=/home/gracchus/code/ucas-multimodal-erc/.torch_cache /home/gracchus/miniconda3/envs/workspace/bin/python -u -m src.evaluate --config configs/audio_hubert_only.yaml --checkpoint checkpoints/audio_hubert_only/best_audio_hubert_only.pt --split test --device cuda --output-dir results/evaluate/audio_hubert_only_test 2>&1 | tee logs/evaluate_audio_hubert_only_test.log
+env -i HOME=/home/gracchus PATH=/home/gracchus/miniconda3/envs/workspace/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/lib/wsl/lib LANG=C.UTF-8 LC_ALL=C.UTF-8 TORCH_HOME=/home/gracchus/code/ucas-multimodal-erc/.torch_cache /home/gracchus/miniconda3/envs/workspace/bin/python -u -m src.evaluate --config configs/text_audio_hubert.yaml --checkpoint checkpoints/text_audio_hubert/best_text_audio_hubert.pt --split test --device cuda --output-dir results/evaluate/text_audio_hubert_test 2>&1 | tee logs/evaluate_text_audio_hubert_test.log
+```
+
+Test results:
+
+```text
+audio_hubert_only  accuracy=0.2927  weighted_f1=0.3185  macro_f1=0.2182
+text_audio_hubert  accuracy=0.5433  weighted_f1=0.5692  macro_f1=0.4149
+```
+
+Conclusion:
+
+HuBERT improves the audio-only branch clearly compared with the old Wav2Vec2 audio-only baseline (`0.3185` vs `0.2337` test weighted F1). However, simple text+HuBERT concat does not yet beat the old text+audio test result. The next multimodal direction should be late fusion or quality-aware gating rather than simply concatenating stronger audio features.
+
+## 2026-05-07: Late Fusion with HuBERT Audio
+
+Implemented a `late_fusion_hubert` model. Instead of concatenating features directly, the model lets text, HuBERT-audio, and visual branches each produce logits first, then learns a gate over the three logit streams. This is a more conservative multimodal fusion strategy when audio/visual features are noisy.
+
+Main code changes:
+
+- Added `LateFusionHubertClassifier` in `src/models/fusion.py`.
+- Registered `late_fusion_hubert` in `src/models/__init__.py`.
+- Added `configs/late_fusion_hubert.yaml`.
+- Updated `src/evaluate.py` so this model can save gate weights.
+- Updated `src/visualize.py` so the comparison plot includes late fusion.
+
+Training command:
+
+```text
+env -i HOME=/home/gracchus PATH=/home/gracchus/miniconda3/envs/workspace/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/lib/wsl/lib LANG=C.UTF-8 LC_ALL=C.UTF-8 TORCH_HOME=/home/gracchus/code/ucas-multimodal-erc/.torch_cache /home/gracchus/miniconda3/envs/workspace/bin/python -u -m src.train --config configs/late_fusion_hubert.yaml --device cuda --output-dir results/late_fusion_hubert --checkpoint-dir checkpoints/late_fusion_hubert 2>&1 | tee logs/train_late_fusion_hubert.log
+```
+
+Dev result:
+
+```text
+late_fusion_hubert  best_epoch=9  weighted_f1=0.5673  macro_f1=0.4380
+```
+
+Test evaluation command:
+
+```text
+env -i HOME=/home/gracchus PATH=/home/gracchus/miniconda3/envs/workspace/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/lib/wsl/lib LANG=C.UTF-8 LC_ALL=C.UTF-8 TORCH_HOME=/home/gracchus/code/ucas-multimodal-erc/.torch_cache /home/gracchus/miniconda3/envs/workspace/bin/python -u -m src.evaluate --config configs/late_fusion_hubert.yaml --checkpoint checkpoints/late_fusion_hubert/best_late_fusion_hubert.pt --split test --device cuda --output-dir results/evaluate/late_fusion_hubert_test 2>&1 | tee logs/evaluate_late_fusion_hubert_test.log
+```
+
+Test result:
+
+```text
+late_fusion_hubert  accuracy=0.5678  weighted_f1=0.5858  macro_f1=0.4234
+```
+
+Missing-modality analysis:
+
+```text
+full             weighted_f1=0.5858  macro_f1=0.4234
+no_text          weighted_f1=0.3360  macro_f1=0.1690
+no_audio         weighted_f1=0.5779  macro_f1=0.4151
+no_visual        weighted_f1=0.5878  macro_f1=0.4226
+no_audio_visual  weighted_f1=0.5893  macro_f1=0.4217
+```
+
+Conclusion:
+
+Late fusion improves over `text_audio_hubert` (`0.5858` vs `0.5692` test weighted F1) and is close to the old best frozen multimodal model `dgf_dropout` (`0.5903`). However, the missing-modality result shows the current model still relies mainly on text: removing text causes a large drop, while removing audio/visual does not. The next useful multimodal work should focus on stronger visual features and quality-aware gates, not just larger fusion heads.

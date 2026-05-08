@@ -11,11 +11,26 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 from pathlib import Path
 
+os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
+os.environ.setdefault("TORCH_COMPILE_DISABLE", "1")
+
+from src.torch_import_patch import patch_inspect_for_torch, restore_common_builtins, stub_torch_dynamo
+
+restore_common_builtins()
+patch_inspect_for_torch()
+
 import torch
+
+restore_common_builtins()
+
 import yaml
 from torch.utils.data import DataLoader
+
+restore_common_builtins()
+stub_torch_dynamo(torch)
 
 from src.dataset import ID2EMOTION, MELD_SPLITS
 from src.train_text_finetune import (
