@@ -41,8 +41,16 @@ class AudioHubertOnlyClassifier(SingleModalityClassifier):
     """Audio-only baseline：HuBERT 特征 -> MLP -> 情绪分类。"""
 
 
+class AudioHubertStatsOnlyClassifier(SingleModalityClassifier):
+    """Audio-only baseline：HuBERT mean+std 特征 -> MLP -> 情绪分类。"""
+
+
 class VisualOnlyClassifier(SingleModalityClassifier):
     """Visual-only baseline：CLIP 帧平均特征 -> MLP -> 情绪分类。"""
+
+
+class VisualFaceOnlyClassifier(SingleModalityClassifier):
+    """Visual-face baseline：face-centered CLIP 特征 -> MLP -> 情绪分类。"""
 
 
 class ConcatClassifier(nn.Module):
@@ -78,8 +86,16 @@ class TextAudioHubertClassifier(ConcatClassifier):
     """Text+HuBERT-Audio concat baseline。"""
 
 
+class TextAudioHubertStatsClassifier(ConcatClassifier):
+    """Text+HuBERT mean+std audio concat baseline。"""
+
+
 class TextVisualClassifier(ConcatClassifier):
     """Text+Visual concat baseline。"""
+
+
+class TextVisualFaceClassifier(ConcatClassifier):
+    """Text+Face-Visual concat baseline。"""
 
 
 class ConcatTAVClassifier(ConcatClassifier):
@@ -119,11 +135,33 @@ def build_audio_hubert_only_model(config: dict | None = None) -> AudioHubertOnly
     )
 
 
+def build_audio_hubert_stats_only_model(config: dict | None = None) -> AudioHubertStatsOnlyClassifier:
+    """按 YAML 配置构造 HuBERT mean+std audio-only baseline。"""
+    config = config or {}
+    return AudioHubertStatsOnlyClassifier(
+        input_dim=int(config.get("output_dim_audio_hubert_stats", config.get("output_dim_audio_hubert", 1536))),
+        projection_dim=int(config.get("projection_dim", 256)),
+        dropout=float(config.get("dropout", 0.3)),
+        num_classes=int(config.get("num_classes", 7)),
+    )
+
+
 def build_visual_only_model(config: dict | None = None) -> VisualOnlyClassifier:
     """按 YAML 配置构造 visual-only baseline。"""
     config = config or {}
     return VisualOnlyClassifier(
         input_dim=int(config.get("output_dim_visual", 512)),
+        projection_dim=int(config.get("projection_dim", 256)),
+        dropout=float(config.get("dropout", 0.3)),
+        num_classes=int(config.get("num_classes", 7)),
+    )
+
+
+def build_visual_face_only_model(config: dict | None = None) -> VisualFaceOnlyClassifier:
+    """按 YAML 配置构造 face-centered visual-only baseline。"""
+    config = config or {}
+    return VisualFaceOnlyClassifier(
+        input_dim=int(config.get("output_dim_visual_face", config.get("output_dim_visual", 512))),
         projection_dim=int(config.get("projection_dim", 256)),
         dropout=float(config.get("dropout", 0.3)),
         num_classes=int(config.get("num_classes", 7)),
@@ -158,6 +196,20 @@ def build_text_audio_hubert_model(config: dict | None = None) -> TextAudioHubert
     )
 
 
+def build_text_audio_hubert_stats_model(config: dict | None = None) -> TextAudioHubertStatsClassifier:
+    """按 YAML 配置构造 text+HuBERT mean+std audio concat baseline。"""
+    config = config or {}
+    return TextAudioHubertStatsClassifier(
+        input_dims=(
+            int(config.get("output_dim_text", 768)),
+            int(config.get("output_dim_audio_hubert_stats", config.get("output_dim_audio_hubert", 1536))),
+        ),
+        projection_dim=int(config.get("projection_dim", 256)),
+        dropout=float(config.get("dropout", 0.3)),
+        num_classes=int(config.get("num_classes", 7)),
+    )
+
+
 def build_text_visual_model(config: dict | None = None) -> TextVisualClassifier:
     """按 YAML 配置构造 text+visual concat baseline。"""
     config = config or {}
@@ -172,14 +224,44 @@ def build_text_visual_model(config: dict | None = None) -> TextVisualClassifier:
     )
 
 
+def build_text_visual_face_model(config: dict | None = None) -> TextVisualFaceClassifier:
+    """按 YAML 配置构造 text+face-visual concat baseline。"""
+    config = config or {}
+    return TextVisualFaceClassifier(
+        input_dims=(
+            int(config.get("output_dim_text", 768)),
+            int(config.get("output_dim_visual_face", config.get("output_dim_visual", 512))),
+        ),
+        projection_dim=int(config.get("projection_dim", 256)),
+        dropout=float(config.get("dropout", 0.3)),
+        num_classes=int(config.get("num_classes", 7)),
+    )
+
+
 def build_concat_tav_model(config: dict | None = None) -> ConcatTAVClassifier:
     """按 YAML 配置构造三模态拼接 baseline。"""
     config = config or {}
+    modalities = config.get("modalities", {})
+
+    # 这里根据配置自动选音频维度，方便比较普通 audio / HuBERT / HuBERT mean+std。
+    if modalities.get("audio_hubert_stats", False):
+        audio_dim = int(config.get("output_dim_audio_hubert_stats", 1536))
+    elif modalities.get("audio_hubert", False):
+        audio_dim = int(config.get("output_dim_audio_hubert", 768))
+    else:
+        audio_dim = int(config.get("output_dim_audio", 768))
+
+    # 视觉同理：整帧 CLIP 和人脸裁剪 CLIP 都共用这个 concat baseline。
+    if modalities.get("visual_face", False):
+        visual_dim = int(config.get("output_dim_visual_face", config.get("output_dim_visual", 512)))
+    else:
+        visual_dim = int(config.get("output_dim_visual", 512))
+
     return ConcatTAVClassifier(
         input_dims=(
             int(config.get("output_dim_text", 768)),
-            int(config.get("output_dim_audio", 768)),
-            int(config.get("output_dim_visual", 512)),
+            audio_dim,
+            visual_dim,
         ),
         projection_dim=int(config.get("projection_dim", 256)),
         dropout=float(config.get("dropout", 0.3)),
@@ -197,14 +279,22 @@ def build_baseline_model(config: dict | None = None) -> nn.Module:
         return build_audio_only_model(config)
     if model_name == "audio_hubert_only":
         return build_audio_hubert_only_model(config)
+    if model_name == "audio_hubert_stats_only":
+        return build_audio_hubert_stats_only_model(config)
     if model_name == "visual_only":
         return build_visual_only_model(config)
+    if model_name == "visual_face_only":
+        return build_visual_face_only_model(config)
     if model_name == "text_audio":
         return build_text_audio_model(config)
     if model_name == "text_audio_hubert":
         return build_text_audio_hubert_model(config)
+    if model_name == "text_audio_hubert_stats":
+        return build_text_audio_hubert_stats_model(config)
     if model_name == "text_visual":
         return build_text_visual_model(config)
-    if model_name == "concat_tav":
+    if model_name == "text_visual_face":
+        return build_text_visual_face_model(config)
+    if model_name in {"concat_tav", "concat_tav_hubert_stats_face"}:
         return build_concat_tav_model(config)
     raise ValueError(f"Unsupported baseline model: {model_name}")

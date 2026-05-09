@@ -10,22 +10,41 @@ import builtins
 
 COMMON_BUILTINS = {
     "bool": builtins.bool,
+    "abs": builtins.abs,
+    "all": builtins.all,
+    "any": builtins.any,
+    "callable": builtins.callable,
     "dict": builtins.dict,
     "enumerate": builtins.enumerate,
+    "filter": builtins.filter,
     "float": builtins.float,
+    "getattr": builtins.getattr,
+    "hasattr": builtins.hasattr,
     "hash": builtins.hash,
+    "id": builtins.id,
     "int": builtins.int,
+    "iter": builtins.iter,
     "isinstance": builtins.isinstance,
+    "issubclass": builtins.issubclass,
     "len": builtins.len,
     "list": builtins.list,
+    "map": builtins.map,
     "max": builtins.max,
     "min": builtins.min,
+    "next": builtins.next,
+    "object": builtins.object,
+    "property": builtins.property,
     "range": builtins.range,
     "reversed": builtins.reversed,
+    "round": builtins.round,
     "set": builtins.set,
+    "setattr": builtins.setattr,
+    "sorted": builtins.sorted,
     "str": builtins.str,
     "sum": builtins.sum,
+    "super": builtins.super,
     "tuple": builtins.tuple,
+    "type": builtins.type,
     "zip": builtins.zip,
 }
 
@@ -69,6 +88,9 @@ def stub_torch_dynamo(torch_module=None) -> None:
         return fn
 
     dynamo.disable = disable
+    dynamo.allow_in_graph = disable
+    dynamo.disallow_in_graph = disable
+    dynamo.optimize = disable
     dynamo.graph_break = lambda *args, **kwargs: None
     dynamo.is_compiling = lambda: False
     dynamo.config = types.SimpleNamespace()
@@ -88,3 +110,11 @@ def stub_torch_dynamo(torch_module=None) -> None:
     sys.modules.setdefault("torch._dynamo.utils", utils_module)
     if torch_module is not None:
         torch_module._dynamo = dynamo
+
+    try:
+        import torch.utils._config_module as config_module
+
+        # 当前 WSL/conda 环境里 inspect/tokenize 偶发异常；项目不依赖这些 compile 注释。
+        config_module.get_assignments_with_compile_ignored_comments = lambda module: set()
+    except Exception:
+        pass

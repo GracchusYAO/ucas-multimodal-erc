@@ -1,0 +1,21 @@
+model_name: audio_hubert_stats_only
+
+modalities:
+  audio_hubert_stats: true
+
+sample_rate: 16000
+max_audio_seconds: 12
+batch_size_audio_hubert: 16
+audio_pooling: mean_std
+output_dim_audio_hubert_stats: 1536
+projection_dim: 256
+dropout: 0.3
+num_classes: 7
+
+optimizer: adamw
+learning_rate: 0.0001
+weight_decay: 0.0001
+batch_size_utterance: 64
+max_epochs: 50
+early_stopping_patience: 5
+seed: 114514

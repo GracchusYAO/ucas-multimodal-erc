@@ -19,7 +19,9 @@ MODALITY_DIRS = {
     "text": "text_roberta",
     "audio": "audio_wav2vec2",
     "audio_hubert": "audio_hubert",
+    "audio_hubert_stats": "audio_hubert_stats",
     "visual": "visual_clip",
+    "visual_face": "visual_face_clip",
 }
 
 

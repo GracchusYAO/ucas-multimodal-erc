@@ -50,13 +50,15 @@ def build_payload(
     failed_keys: list[str],
     sample_rate: int,
     max_audio_seconds: float,
+    pooling: str,
 ) -> dict:
     return {
         "split": split,
         "model_name": "torchaudio.pipelines.HUBERT_BASE",
         "sample_rate": sample_rate,
         "max_audio_seconds": max_audio_seconds,
-        "features": features,  # [样本数, 768]
+        "pooling": pooling,
+        "features": features,  # mean: [样本数, 768]；mean_std: [样本数, 1536]
         "available": available,  # False 表示这条音频不可用，用零向量占位
         "failed_keys": failed_keys,
         "labels": torch.tensor([item.emotion_id for item in utterances], dtype=torch.long),
@@ -69,15 +71,26 @@ def build_payload(
     }
 
 
-def mean_pool_valid_frames(hidden: torch.Tensor, lengths: torch.Tensor | None) -> torch.Tensor:
-    """按 HuBERT 输出长度做 mean pooling，避免 padding 帧混进来。"""
+def pool_valid_frames(hidden: torch.Tensor, lengths: torch.Tensor | None, pooling: str) -> torch.Tensor:
+    """按 HuBERT 输出长度做 pooling，避免 padding 帧混进来。"""
     if lengths is None:
-        return hidden.mean(dim=1)
+        mean = hidden.mean(dim=1)
+        if pooling == "mean":
+            return mean
+        std = hidden.std(dim=1, unbiased=False)
+        return torch.cat([mean, std], dim=1)
 
     frame_ids = torch.arange(hidden.size(1), device=hidden.device).unsqueeze(0)
     mask = frame_ids < lengths.unsqueeze(1)
     masked = hidden * mask.unsqueeze(-1)
-    return masked.sum(dim=1) / lengths.clamp(min=1).unsqueeze(1)
+    mean = masked.sum(dim=1) / lengths.clamp(min=1).unsqueeze(1)
+    if pooling == "mean":
+        return mean
+
+    centered = (hidden - mean.unsqueeze(1)) * mask.unsqueeze(-1)
+    variance = (centered * centered).sum(dim=1) / lengths.clamp(min=1).unsqueeze(1)
+    std = torch.sqrt(variance.clamp(min=1e-12))
+    return torch.cat([mean, std], dim=1)  # mean+std 能保留更多时序起伏信息
 
 
 def extract_split(
@@ -87,6 +100,7 @@ def extract_split(
     sample_rate: int,
     batch_size: int,
     max_audio_seconds: float,
+    pooling: str,
     device: str | None,
     force: bool,
     dry_run: bool,
@@ -115,7 +129,8 @@ def extract_split(
     model = bundle.get_model().to(device_obj)
     model.eval()
 
-    feature_dim = int(bundle._params["encoder_embed_dim"])  # HUBERT_BASE 是 768
+    base_dim = int(bundle._params["encoder_embed_dim"])  # HUBERT_BASE 是 768
+    feature_dim = base_dim * 2 if pooling == "mean_std" else base_dim
     features = torch.zeros(len(utterances), feature_dim, dtype=torch.float32)
     available = torch.zeros(len(utterances), dtype=torch.bool)
     failed_keys: list[str] = []
@@ -144,7 +159,7 @@ def extract_split(
         with torch.no_grad():
             layer_outputs, output_lengths = model.extract_features(padded, lengths=lengths)
             hidden = layer_outputs[-1]  # 最后一层 HuBERT 表示
-            pooled = mean_pool_valid_frames(hidden, output_lengths).cpu()
+            pooled = pool_valid_frames(hidden, output_lengths, pooling).cpu()
 
         features[valid_indices] = pooled
         available[valid_indices] = True
@@ -157,6 +172,7 @@ def extract_split(
         failed_keys,
         sample_rate,
         max_audio_seconds,
+        pooling,
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -176,6 +192,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sample-rate", type=int)
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--max-audio-seconds", type=float)
+    parser.add_argument("--pooling", choices=("mean", "mean_std"))
     parser.add_argument("--device")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -189,6 +206,7 @@ def main() -> None:
     sample_rate = args.sample_rate or int(config.get("sample_rate", 16000))
     batch_size = args.batch_size or int(config.get("batch_size_audio_hubert", 8))
     max_audio_seconds = args.max_audio_seconds or float(config.get("max_audio_seconds", 12))
+    pooling = args.pooling or str(config.get("audio_pooling", "mean"))
 
     for split in args.split or MELD_SPLITS:
         extract_split(
@@ -198,6 +216,7 @@ def main() -> None:
             sample_rate,
             batch_size,
             max_audio_seconds,
+            pooling,
             args.device,
             args.force,
             args.dry_run,

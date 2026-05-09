@@ -29,7 +29,6 @@ import torch
 restore_common_builtins()
 
 import yaml
-from sklearn.metrics import accuracy_score, f1_score
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 from transformers import AutoModel, AutoTokenizer, get_linear_schedule_with_warmup
@@ -174,6 +173,31 @@ def class_weights(labels: torch.Tensor, num_classes: int) -> torch.Tensor:
     return counts.sum() / (counts.clamp(min=1) * num_classes)  # 类别越少，loss 权重越高
 
 
+def compute_basic_metrics(gold_labels: list[int], predictions: list[int]) -> dict[str, float]:
+    """不用 sklearn，手写 accuracy / weighted F1 / macro F1，减少导入依赖。"""
+    total = len(gold_labels)
+    correct = sum(int(gold == pred) for gold, pred in zip(gold_labels, predictions))
+    weighted_f1 = 0.0
+    macro_f1 = 0.0
+
+    for label_id in ID2EMOTION:
+        tp = sum(1 for gold, pred in zip(gold_labels, predictions) if gold == label_id and pred == label_id)
+        fp = sum(1 for gold, pred in zip(gold_labels, predictions) if gold != label_id and pred == label_id)
+        fn = sum(1 for gold, pred in zip(gold_labels, predictions) if gold == label_id and pred != label_id)
+        support = sum(1 for gold in gold_labels if gold == label_id)
+        precision = tp / (tp + fp) if tp + fp else 0.0
+        recall = tp / (tp + fn) if tp + fn else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+        weighted_f1 += f1 * support
+        macro_f1 += f1
+
+    return {
+        "accuracy": correct / total if total else 0.0,
+        "weighted_f1": weighted_f1 / total if total else 0.0,
+        "macro_f1": macro_f1 / len(ID2EMOTION),
+    }
+
+
 def build_collate_fn(tokenizer, max_length: int):
     def collate(items: list[dict]) -> dict:
         encoded = tokenizer(
@@ -264,12 +288,7 @@ def evaluate(
                 }
             )
 
-    metrics = {
-        "loss": total_loss / max(total_count, 1),
-        "accuracy": accuracy_score(gold_labels, predictions),
-        "weighted_f1": f1_score(gold_labels, predictions, average="weighted", zero_division=0),
-        "macro_f1": f1_score(gold_labels, predictions, average="macro", zero_division=0),
-    }
+    metrics = {"loss": total_loss / max(total_count, 1), **compute_basic_metrics(gold_labels, predictions)}
     return metrics, rows
 
 

@@ -8,36 +8,46 @@ import json
 import os
 from pathlib import Path
 
+from src.torch_import_patch import patch_inspect_for_torch, restore_common_builtins, stub_torch_dynamo
+
+restore_common_builtins()
+patch_inspect_for_torch()
+
 from sklearn.metrics import (
     accuracy_score,
     classification_report,
     confusion_matrix,
     f1_score,
 )
-from src.torch_import_patch import patch_inspect_for_torch
 
-patch_inspect_for_torch()
+restore_common_builtins()
 
 import torch
 
-os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")  # 避免默认 ~/.config 不可写的 warning
+restore_common_builtins()
+stub_torch_dynamo(torch)
 
-import matplotlib
-
-matplotlib.use("Agg")
-
-import matplotlib.pyplot as plt
 import yaml
+
+restore_common_builtins()
 
 from src.dataset import ID2EMOTION, MELD_SPLITS
 from src.feature_dataset import make_dialogue_loader, make_feature_loader
 from src.models import build_model
-from src.train import active_modalities, choose_device, set_seed
+from src.train import active_modalities, build_quality_tensor, choose_device, set_seed
 
 
 LABEL_IDS = list(range(len(ID2EMOTION)))
 LABEL_NAMES = [ID2EMOTION[index] for index in LABEL_IDS]
-GATED_MODELS = {"dgf", "dgf_dropout", "dgf_context", "late_fusion_hubert"}
+GATED_MODELS = {
+    "dgf",
+    "dgf_dropout",
+    "dgf_context",
+    "late_fusion_hubert",
+    "late_fusion_hubert_face",
+    "late_fusion_hubert_stats",
+    "quality_late_fusion_hubert",
+}
 
 
 def load_config(path: str | Path) -> dict:
@@ -84,14 +94,26 @@ def collect_predictions(
                 feature = torch.zeros_like(feature)  # 评估缺失模态时，直接把该模态置零
             inputs.append(feature)
 
+        quality = None
+        if getattr(model, "uses_quality", False):
+            quality = build_quality_tensor(batch, modalities, device)
+            for modality in zero_modalities:
+                if modality in modalities:
+                    quality[:, modalities.index(modality)] = 0.0  # 被遮掉的模态也标成不可用
+
         if collect_gates:
-            text, audio, visual = inputs
-            if use_context:
+            if quality is not None:
+                logits, gates = model(*inputs, quality=quality, return_gate=True)
+            elif use_context:
+                text, audio, visual = inputs
                 logits, gates = model(text, audio, visual, mask=mask, return_gate=True)
             else:
+                text, audio, visual = inputs
                 logits, gates = model(text, audio, visual, return_gate=True)
         else:
-            if use_context:
+            if quality is not None:
+                logits = model(*inputs, quality=quality)
+            elif use_context:
                 logits = model(*inputs, mask=mask)
             else:
                 logits = model(*inputs)
@@ -206,19 +228,7 @@ def save_confusion_matrix(output_dir: Path, gold_labels: list[int], predictions:
         for name, row in zip(LABEL_NAMES, matrix):
             writer.writerow([name, *row.tolist()])
 
-    fig, ax = plt.subplots(figsize=(8, 6))
-    image = ax.imshow(matrix, cmap="Blues")
-    fig.colorbar(image, ax=ax)
-    ax.set_xticks(range(len(LABEL_NAMES)), labels=LABEL_NAMES, rotation=45, ha="right")
-    ax.set_yticks(range(len(LABEL_NAMES)), labels=LABEL_NAMES)
-    for row in range(matrix.shape[0]):
-        for col in range(matrix.shape[1]):
-            ax.text(col, row, int(matrix[row, col]), ha="center", va="center", fontsize=8)
-    plt.xlabel("Predicted")
-    plt.ylabel("Gold")
-    plt.tight_layout()
-    plt.savefig(output_dir / "confusion_matrix.png", dpi=200)
-    plt.close()
+    # 当前 WSL/conda 环境里 matplotlib 偶发污染全局状态；评估阶段只保存 CSV。
 
 
 def evaluate_checkpoint(args: argparse.Namespace) -> dict:
@@ -309,7 +319,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--no-save-gates", action="store_true")
-    parser.add_argument("--zero-modality", action="append", choices=("text", "audio", "audio_hubert", "visual"))
+    parser.add_argument(
+        "--zero-modality",
+        action="append",
+        choices=("text", "audio", "audio_hubert", "audio_hubert_stats", "visual", "visual_face"),
+    )
     return parser.parse_args()
 
 

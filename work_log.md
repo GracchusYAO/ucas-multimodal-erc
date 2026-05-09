@@ -798,3 +798,120 @@ no_audio_visual  weighted_f1=0.5893  macro_f1=0.4217
 Conclusion:
 
 Late fusion improves over `text_audio_hubert` (`0.5858` vs `0.5692` test weighted F1) and is close to the old best frozen multimodal model `dgf_dropout` (`0.5903`). However, the missing-modality result shows the current model still relies mainly on text: removing text causes a large drop, while removing audio/visual does not. The next useful multimodal work should focus on stronger visual features and quality-aware gates, not just larger fusion heads.
+
+## 2026-05-08: Quality-aware Gate and Mixed Ensemble Attempt
+
+Committed the previous HuBERT and late-fusion work first:
+
+```text
+8b55685 Add HuBERT and late fusion experiments
+```
+
+Implemented `quality_late_fusion_hubert`. Compared with plain late fusion, this model also receives per-modality availability flags such as `audio_hubert_available` and `visual_available`. During training it can randomly mark modalities as unavailable, so the gate learns to avoid missing or unreliable modalities.
+
+Main code changes:
+
+- Added `QualityLateFusionHubertClassifier` in `src/models/fusion.py`.
+- Added `configs/quality_late_fusion_hubert.yaml`.
+- Updated `src/train.py` to pass `[text, audio_hubert, visual]` quality flags into models that set `uses_quality = True`.
+- Updated `src/evaluate.py` to pass quality flags and to avoid importing `matplotlib` during evaluation, because this WSL/conda environment sometimes corrupts global import state during plotting.
+- Updated `src/visualize.py` with the same builtins restore guard.
+- Removed the top-level `sklearn` dependency from `src/train_text_finetune.py` and replaced it with a small hand-written F1 calculator, reducing import-time instability.
+- Added `src/evaluate_mixed_ensemble.py` for a future mixed ensemble between fine-tuned text checkpoints and cached-feature multimodal checkpoints.
+
+Training command:
+
+```text
+env -i HOME=/home/gracchus PATH=/home/gracchus/miniconda3/envs/workspace/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/lib/wsl/lib LANG=C.UTF-8 LC_ALL=C.UTF-8 TORCH_HOME=/home/gracchus/code/ucas-multimodal-erc/.torch_cache /home/gracchus/miniconda3/envs/workspace/bin/python -u -m src.train --config configs/quality_late_fusion_hubert.yaml --device cuda --output-dir results/quality_late_fusion_hubert --checkpoint-dir checkpoints/quality_late_fusion_hubert 2>&1 | tee logs/train_quality_late_fusion_hubert.log
+```
+
+Dev result:
+
+```text
+quality_late_fusion_hubert  best_epoch=16  weighted_f1=0.5572  macro_f1=0.4298
+```
+
+Test result:
+
+```text
+quality_late_fusion_hubert  accuracy=0.5536  weighted_f1=0.5779  macro_f1=0.4241
+```
+
+Missing-modality result:
+
+```text
+full             weighted_f1=0.5779  macro_f1=0.4241
+no_text          weighted_f1=0.1900  macro_f1=0.1833
+no_audio         weighted_f1=0.5778  macro_f1=0.4260
+no_visual        weighted_f1=0.5777  macro_f1=0.4255
+no_audio_visual  weighted_f1=0.5760  macro_f1=0.4209
+```
+
+Conclusion:
+
+The quality-aware gate is more explicit about missing modalities, but it did not improve weighted F1 over plain late fusion (`0.5779` vs `0.5858`). It slightly improves macro F1 over plain late fusion (`0.4241` vs `0.4234`), but the gain is too small to treat as a main result. The useful conclusion is that current audio/visual branches still provide weak complementary information.
+
+Mixed ensemble attempt:
+
+I added a script for combining fine-tuned text logits with multimodal logits, but running all large text models and multimodal models in one process was unstable in the current WSL/conda environment. The process hit import-time failures and one segmentation fault. The safer next step is to split this into two stages:
+
+1. Save dev/test logits for each text and multimodal checkpoint into small `.pt` files.
+2. Run ensemble weight search from those saved logits without loading large model checkpoints again.
+
+## 2026-05-08: Modality-quality Pass for Audio and Visual
+
+Goal:
+
+After the quality-gate attempt, the main issue was clear: the fusion module was not the bottleneck by itself. The audio and visual branches were still weak, so this pass focused on improving the actual cached modality features before adding more fusion complexity.
+
+Audio changes:
+
+- Updated `src/extract_audio_hubert_features.py` to support `--pooling mean_std`.
+- Added `audio_hubert_stats` features with HuBERT frame mean + std, so each utterance becomes a 1536-dim vector.
+- Added configs and baselines for `audio_hubert_stats_only` and `text_audio_hubert_stats`.
+
+Audio results:
+
+```text
+audio_hubert_only       test weighted_f1=0.3185  macro_f1=0.2182
+audio_hubert_stats_only test weighted_f1=0.3350  macro_f1=0.2161
+text_audio_hubert       test weighted_f1=0.5692  macro_f1=0.4149
+text_audio_hubert_stats test weighted_f1=0.5512  macro_f1=0.3775
+```
+
+Conclusion:
+
+HuBERT mean+std improves audio-only performance, so it is a real audio feature-quality improvement. However, simple Text+Audio concat gets worse after adding the larger audio vector. This suggests the audio branch is still noisy relative to text and should be used carefully.
+
+Visual changes:
+
+- Added `src/extract_visual_face_features.py`.
+- The script samples video frames, detects the largest face with OpenCV Haar cascade, crops around that face, and then extracts CLIP image features.
+- If no face is detected in a frame, it falls back to the full frame.
+- Added `visual_face`, `visual_face_only`, and `text_visual_face`.
+- Added `concat_tav_hubert_stats_face`, a simple concat baseline using Text + HuBERT mean/std + Face-CLIP. This is intentionally not a new fusion module; it is only a stronger-feature concat comparison.
+
+Feature extraction notes:
+
+```text
+dev   features/visual_face_clip/dev.pt    available=1108  face_frames=8133   failed=dev:dia110_utt7
+train features/visual_face_clip/train.pt  available=9988  face_frames=73272  failed=train:dia125_utt3
+test  features/visual_face_clip/test.pt   available=2610  face_frames=19162
+```
+
+The train and test face-feature extraction used GPU outside the sandbox. Later cached-feature training was run on CPU because the Codex sandbox could not see the GPU, and the follow-up sandbox-outside training command was rejected by the current usage limit. These MLP trainings are small and not performance-critical; to reproduce on GPU, replace `--device cpu` with `--device cuda`.
+
+Visual and multimodal results:
+
+```text
+visual_only                 test weighted_f1=0.2724  macro_f1=0.1807
+visual_face_only            test weighted_f1=0.2888  macro_f1=0.1636
+text_visual                 test weighted_f1=0.5489  macro_f1=0.4000
+text_visual_face            test weighted_f1=0.5587  macro_f1=0.4167
+concat_tav                  test weighted_f1=0.5794  macro_f1=0.4067
+concat_tav_hubert_stats_face test weighted_f1=0.5570 macro_f1=0.4054
+```
+
+Conclusion:
+
+Face-centered CLIP is a useful visual-feature improvement: it improves both visual-only and Text+Visual. However, the strongest simple full multimodal result is still the old `concat_tav` test weighted F1 (`0.5794`), and the improved-feature three-modal concat (`0.5570`) does not beat it. For the report, this is still valuable: it shows that visual quality helps locally, while naive three-modal concatenation can dilute the text signal. The next performance direction should be a stronger text checkpoint plus offline logit-level ensembling, or a carefully regularized multimodal model that does not let noisy audio dominate.

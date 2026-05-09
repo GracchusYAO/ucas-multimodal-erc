@@ -10,23 +10,37 @@ from pathlib import Path
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")  # 防止 matplotlib 写用户目录失败
 
+from src.torch_import_patch import restore_common_builtins
+
+restore_common_builtins()
+
 import matplotlib
 
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 
+restore_common_builtins()
+
 
 MODEL_ORDER = [
     "audio_only",
     "audio_hubert_only",
+    "audio_hubert_stats_only",
     "visual_only",
+    "visual_face_only",
     "text_only",
     "text_audio",
     "text_audio_hubert",
+    "text_audio_hubert_stats",
     "text_visual",
+    "text_visual_face",
     "concat_tav",
+    "concat_tav_hubert_stats_face",
     "late_fusion_hubert",
+    "late_fusion_hubert_stats",
+    "late_fusion_hubert_face",
+    "quality_late_fusion_hubert",
     "dgf",
     "dgf_dropout",
     "dgf_context",
@@ -34,13 +48,21 @@ MODEL_ORDER = [
 MODEL_NAMES = {
     "audio_only": "Audio",
     "audio_hubert_only": "HuBERT",
+    "audio_hubert_stats_only": "HuBERTStats",
     "visual_only": "Visual",
+    "visual_face_only": "FaceVisual",
     "text_only": "Text",
     "text_audio": "Text+Audio",
     "text_audio_hubert": "Text+HuBERT",
+    "text_audio_hubert_stats": "Text+HStats",
     "text_visual": "Text+Visual",
+    "text_visual_face": "Text+Face",
     "concat_tav": "Concat",
+    "concat_tav_hubert_stats_face": "ConcatHStatsFace",
     "late_fusion_hubert": "LateFusion",
+    "late_fusion_hubert_stats": "LateHStats",
+    "late_fusion_hubert_face": "LateFace",
+    "quality_late_fusion_hubert": "QualityLate",
     "dgf": "DGF",
     "dgf_dropout": "DGF+Drop",
     "dgf_context": "DGF+Ctx",
@@ -77,6 +99,7 @@ def save_metrics_summary(output_dir: Path, metrics: dict[str, dict]) -> None:
 
 
 def plot_f1_comparison(output_dir: Path, metrics: dict[str, dict]) -> None:
+    restore_common_builtins()
     models = list(metrics)
     labels = [MODEL_NAMES.get(model, model) for model in models]
     weighted = [metrics[model]["weighted_f1"] for model in models]
@@ -100,12 +123,14 @@ def plot_f1_comparison(output_dir: Path, metrics: dict[str, dict]) -> None:
     for x, value in zip([x + width / 2 for x in x_positions], macro):
         ax.text(x, value + 0.008, f"{value:.3f}", ha="center", va="bottom", fontsize=8)
 
+    restore_common_builtins()
     plt.tight_layout()
     plt.savefig(output_dir / "f1_comparison.png", dpi=200)
     plt.close()
 
 
 def plot_per_class_f1(output_dir: Path, model_name: str, metrics: dict) -> None:
+    restore_common_builtins()
     values = [metrics["per_class"][emotion]["f1"] for emotion in EMOTIONS]
 
     fig, ax = plt.subplots(figsize=(9, 5))
@@ -118,6 +143,7 @@ def plot_per_class_f1(output_dir: Path, model_name: str, metrics: dict) -> None:
     for bar, value in zip(bars, values):
         ax.text(bar.get_x() + bar.get_width() / 2, value + 0.008, f"{value:.3f}", ha="center", fontsize=8)
 
+    restore_common_builtins()
     plt.tight_layout()
     plt.savefig(output_dir / f"per_class_f1_{model_name}.png", dpi=200)
     plt.close()
@@ -142,6 +168,7 @@ def normalize_rows(matrix: list[list[float]]) -> list[list[float]]:
 
 
 def plot_confusion_matrix(output_dir: Path, evaluate_root: Path, model_name: str) -> None:
+    restore_common_builtins()
     source = evaluate_root / f"{model_name}_test" / "confusion_matrix.csv"
     labels, matrix = load_confusion_matrix(source)
     normalized = normalize_rows(matrix)
@@ -159,6 +186,7 @@ def plot_confusion_matrix(output_dir: Path, evaluate_root: Path, model_name: str
         for col_index, value in enumerate(row):
             ax.text(col_index, row_index, f"{value:.2f}", ha="center", va="center", fontsize=8)
 
+    restore_common_builtins()
     plt.tight_layout()
     plt.savefig(output_dir / f"confusion_matrix_{model_name}.png", dpi=200)
     plt.close()
@@ -197,6 +225,7 @@ def save_gate_summary(output_dir: Path, model_name: str, averages: dict[str, lis
 
 
 def plot_gate_weights(output_dir: Path, evaluate_root: Path, model_name: str) -> None:
+    restore_common_builtins()
     source = evaluate_root / f"{model_name}_test" / "gate_weights.csv"
     if not source.exists():
         print(f"skip gate plot: missing {source}")
@@ -224,6 +253,7 @@ def plot_gate_weights(output_dir: Path, evaluate_root: Path, model_name: str) ->
     ax.legend(loc="upper right")
     ax.grid(axis="y", alpha=0.25)
 
+    restore_common_builtins()
     plt.tight_layout()
     plt.savefig(output_dir / f"gate_weights_by_emotion_{model_name}.png", dpi=200)
     plt.close()
@@ -264,6 +294,7 @@ def plot_missing_modality_analysis(
     model_name: str,
     full_metrics: dict,
 ) -> None:
+    restore_common_builtins()
     rows = load_missing_modality_metrics(missing_root, model_name, full_metrics)
     if len(rows) <= 1:
         print(f"skip missing-modality plot: no ablation metrics under {missing_root}")
@@ -291,6 +322,7 @@ def plot_missing_modality_analysis(
     ax.legend()
     ax.grid(axis="y", alpha=0.25)
 
+    restore_common_builtins()
     plt.tight_layout()
     plt.savefig(output_dir / f"missing_modality_analysis_{model_name}.png", dpi=200)
     plt.close()

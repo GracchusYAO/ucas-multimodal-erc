@@ -62,7 +62,7 @@ def class_weights(labels: torch.Tensor, num_classes: int) -> torch.Tensor:
 def active_modalities(config: dict) -> tuple[str, ...]:
     """从 config 里读出当前模型使用哪些模态。"""
     enabled = config.get("modalities", {"text": True})
-    names = ("text", "audio", "audio_hubert", "visual")
+    names = ("text", "audio", "audio_hubert", "audio_hubert_stats", "visual", "visual_face")
     return tuple(name for name in names if enabled.get(name, False))
 
 
@@ -75,9 +75,29 @@ def forward_batch(
 ) -> torch.Tensor:
     """把 batch 中需要的模态取出来，按顺序喂给模型。"""
     inputs = [batch[modality].to(device) for modality in modalities]  # 按 config 顺序取模态特征
+    if getattr(model, "uses_quality", False):
+        if use_context:
+            raise ValueError("Quality-aware model currently only supports utterance batches.")
+        quality = build_quality_tensor(batch, modalities, device)
+        return model(*inputs, quality=quality)
     if use_context:
         return model(*inputs, mask=batch["mask"].to(device))  # dialogue batch 需要 mask
     return model(*inputs)
+
+
+def build_quality_tensor(
+    batch: dict,
+    modalities: tuple[str, ...],
+    device: torch.device,
+) -> torch.Tensor:
+    """把各模态 available 标记整理成 [B, M]，没有标记的文本默认可用。"""
+    batch_size = batch["label"].size(0)
+    quality = torch.ones(batch_size, len(modalities), device=device)
+    for index, modality in enumerate(modalities):
+        key = f"{modality}_available"
+        if key in batch:
+            quality[:, index] = batch[key].to(device).float()
+    return quality
 
 
 def batch_loss(

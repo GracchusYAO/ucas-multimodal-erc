@@ -1,0 +1,21 @@
+model_name: concat_tav_hubert_stats_face
+
+modalities:
+  text: true
+  audio_hubert_stats: true
+  visual_face: true
+
+output_dim_text: 768
+output_dim_audio_hubert_stats: 1536
+output_dim_visual_face: 512
+projection_dim: 256
+dropout: 0.3
+num_classes: 7
+
+optimizer: adamw
+learning_rate: 0.0001
+weight_decay: 0.0001
+batch_size_utterance: 64
+max_epochs: 50
+early_stopping_patience: 5
+seed: 114514

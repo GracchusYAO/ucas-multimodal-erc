@@ -3,29 +3,39 @@
 from src.models.baselines import (
     AudioOnlyClassifier,
     AudioHubertOnlyClassifier,
+    AudioHubertStatsOnlyClassifier,
     ConcatClassifier,
     ConcatTAVClassifier,
     TextOnlyClassifier,
     TextAudioClassifier,
     TextAudioHubertClassifier,
+    TextAudioHubertStatsClassifier,
+    TextVisualFaceClassifier,
     TextVisualClassifier,
+    VisualFaceOnlyClassifier,
     VisualOnlyClassifier,
     build_audio_only_model,
     build_audio_hubert_only_model,
+    build_audio_hubert_stats_only_model,
     build_baseline_model,
     build_concat_tav_model,
     build_text_audio_model,
     build_text_audio_hubert_model,
+    build_text_audio_hubert_stats_model,
     build_text_only_model,
+    build_text_visual_face_model,
     build_text_visual_model,
+    build_visual_face_only_model,
     build_visual_only_model,
 )
 from src.models.context import DGFContextClassifier, build_dgf_context_model
 from src.models.fusion import (
     DynamicGatedFusionClassifier,
     LateFusionHubertClassifier,
+    QualityLateFusionHubertClassifier,
     build_dgf_model,
     build_late_fusion_hubert_model,
+    build_quality_late_fusion_hubert_model,
 )
 
 
@@ -37,19 +47,26 @@ def build_model(config: dict | None = None):
         "text_only",
         "audio_only",
         "audio_hubert_only",
+        "audio_hubert_stats_only",
         "visual_only",
         "text_audio",
         "text_audio_hubert",
+        "text_audio_hubert_stats",
         "text_visual",
+        "text_visual_face",
         "concat_tav",
+        "concat_tav_hubert_stats_face",
+        "visual_face_only",
     }:
         return build_baseline_model(config)
     if model_name in {"dgf", "dgf_dropout"}:
         return build_dgf_model(config)
     if model_name == "dgf_context":
         return build_dgf_context_model(config)
-    if model_name == "late_fusion_hubert":
+    if model_name in {"late_fusion_hubert", "late_fusion_hubert_face", "late_fusion_hubert_stats"}:
         return build_late_fusion_hubert_model(config)
+    if model_name == "quality_late_fusion_hubert":
+        return build_quality_late_fusion_hubert_model(config)
     raise ValueError(f"Unsupported model_name: {model_name}")
 
 __all__ = [
@@ -58,24 +75,34 @@ __all__ = [
     "DGFContextClassifier",
     "DynamicGatedFusionClassifier",
     "LateFusionHubertClassifier",
+    "QualityLateFusionHubertClassifier",
     "TextOnlyClassifier",
     "TextAudioClassifier",
     "TextAudioHubertClassifier",
+    "TextAudioHubertStatsClassifier",
     "TextVisualClassifier",
+    "TextVisualFaceClassifier",
     "AudioOnlyClassifier",
     "AudioHubertOnlyClassifier",
+    "AudioHubertStatsOnlyClassifier",
     "VisualOnlyClassifier",
+    "VisualFaceOnlyClassifier",
     "build_audio_only_model",
     "build_audio_hubert_only_model",
+    "build_audio_hubert_stats_only_model",
     "build_baseline_model",
     "build_concat_tav_model",
     "build_text_audio_model",
     "build_text_audio_hubert_model",
+    "build_text_audio_hubert_stats_model",
     "build_dgf_context_model",
     "build_dgf_model",
     "build_late_fusion_hubert_model",
+    "build_quality_late_fusion_hubert_model",
     "build_model",
     "build_text_only_model",
+    "build_text_visual_face_model",
     "build_text_visual_model",
+    "build_visual_face_only_model",
     "build_visual_only_model",
 ]

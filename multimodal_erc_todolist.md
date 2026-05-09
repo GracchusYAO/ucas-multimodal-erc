@@ -397,11 +397,13 @@ Run these experiments in order.
 - [x] Add text fine-tune ensemble evaluation.
 - [x] Add frozen-feature audio-only and visual-only baselines.
 - [x] Rebuild audio features with a stronger speech encoder such as Whisper or HuBERT.
-- [ ] Rebuild visual features with face-centered frames or an expression-focused visual encoder.
+- [x] Rebuild visual features with face-centered frames or an expression-focused visual encoder.
 - [x] Add audio-only strong-feature baseline before fusing again.
-- [ ] Add visual-only fine-tuned/strong-feature baseline before fusing again.
+- [x] Add visual-only fine-tuned/strong-feature baseline before fusing again.
+- [x] Add simple concat baseline with stronger audio and face-centered visual features.
 - [x] Add late-fusion logits baseline between strong text/audio/visual models.
-- [ ] Add quality-aware multimodal gating using missing-modality and modality-confidence signals.
+- [x] Add quality-aware multimodal gating using missing-modality and modality-confidence signals.
+- [ ] Split strong text logits and multimodal logits into offline files before mixed ensemble.
 
 ---
 
