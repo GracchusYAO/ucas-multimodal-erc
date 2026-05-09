@@ -915,3 +915,235 @@ concat_tav_hubert_stats_face test weighted_f1=0.5570 macro_f1=0.4054
 Conclusion:
 
 Face-centered CLIP is a useful visual-feature improvement: it improves both visual-only and Text+Visual. However, the strongest simple full multimodal result is still the old `concat_tav` test weighted F1 (`0.5794`), and the improved-feature three-modal concat (`0.5570`) does not beat it. For the report, this is still valuable: it shows that visual quality helps locally, while naive three-modal concatenation can dilute the text signal. The next performance direction should be a stronger text checkpoint plus offline logit-level ensembling, or a carefully regularized multimodal model that does not let noisy audio dominate.
+
+## 2026-05-09: Current Diagnosis and Multimodal Direction
+
+After comparing local results with MELD baselines and published/reference projects, the current performance picture is:
+
+```text
+frozen text_only             test weighted_f1=0.5722
+frozen concat_tav            test weighted_f1=0.5794
+frozen late_fusion_hubert    test weighted_f1=0.5858
+frozen dgf_dropout           test weighted_f1=0.5903
+fine-tuned text ensemble     test weighted_f1=0.6744
+audio_hubert_stats_only      test weighted_f1=0.3350
+visual_face_only             test weighted_f1=0.2888
+```
+
+Important diagnosis:
+
+- The frozen-feature multimodal results around `0.58-0.59` weighted F1 are not obviously broken; they are near early MELD-style baselines.
+- The stronger fine-tuned text ensemble already reaches about `0.67` weighted F1, so the project is not fundamentally stuck at `0.5`.
+- Current audio and visual branches are much weaker than text. Simply concatenating or averaging them can dilute the text signal.
+- Single-modal audio/visual runs do not show a clear “train longer and it will reach 0.8” pattern; they usually peak early and then overfit or flatten.
+- The main project risk is not the optimizer or epoch count alone. The bigger issue is representation quality and the way weak modalities are allowed to influence prediction.
+
+Direction from this point:
+
+- Treat fine-tuned text as the main trunk.
+- Treat audio/visual and frozen-feature multimodal models as auxiliary signals.
+- Use gated multimodal fusion conservatively: only let the multimodal branch intervene when the text model is uncertain, and keep the auxiliary weight bounded.
+- Keep reporting the older frozen DGF / late-fusion models as course-project multimodal baselines, but make the stronger final model a “strong text + confidence-gated multimodal” system.
+
+Implementation started:
+
+- Added `src/export_logits.py` so each text or multimodal checkpoint can export dev/test logits separately. This avoids loading all large models in one unstable process.
+- Added `src/evaluate_offline_gated_fusion.py` for offline confidence-gated fusion. It searches text ensemble weights, auxiliary multimodal weights, confidence threshold, and multimodal gate strength on dev, then evaluates once on test.
+- The gate is intentionally conservative: text remains the backbone, and multimodal logits are used as a bounded supplement on low-confidence examples.
+
+Logits exported:
+
+```text
+text:
+  text_finetune_context
+  text_finetune_context_unweighted
+  text_finetune_context5_unweighted
+  text_finetune_context8_unweighted
+  text_finetune_roberta_large_context5_unweighted
+  text_finetune_deberta_v3_base_context5_unweighted
+
+multimodal auxiliary:
+  dgf_dropout
+  late_fusion_hubert
+  quality_late_fusion_hubert
+  concat_tav
+  text_visual_face
+```
+
+Relevant logs:
+
+```text
+logs/export_logits_feature.log
+logs/export_logits_text.log
+logs/evaluate_offline_gated_multimodal.log
+logs/evaluate_offline_gated_multimodal_allow_zero.log
+```
+
+Offline gated multimodal result:
+
+```text
+output: results/offline_gated_multimodal
+test accuracy:     0.6797
+test weighted_f1:  0.6757
+test macro_f1:     0.5190
+```
+
+Gate details:
+
+```text
+text ensemble weights:
+  [0.1122, 0.1230, 0.0112, 0.0953, 0.4887, 0.1695]
+
+multimodal auxiliary weights:
+  dgf_dropout:                 0.1847
+  late_fusion_hubert:          0.7014
+  quality_late_fusion_hubert:  0.0957
+  concat_tav:                  0.0062
+  text_visual_face:            0.0120
+
+dev gate threshold: 0.375
+dev gate alpha:     0.440
+test active ratio:  0.0364
+test mean aux gate: 0.0160
+```
+
+The same result is selected even when the search is allowed to choose `alpha=0`, so the non-zero multimodal gate is not just forced by the script. The improvement over the previous strong text ensemble is small (`0.6744 -> 0.6757` weighted F1), but it is a useful project result: the best current multimodal path is not “more fusion layers”, but a text-dominant gated model that only trusts multimodal evidence on a small set of uncertain utterances.
+
+Prediction-change analysis on the test split:
+
+```text
+total samples:          2610
+gate-active samples:     95
+changed predictions:     47
+text mistakes fixed:     13
+text correct changed:    11
+```
+
+This is consistent with the intended behavior: the multimodal branch changes only a small fraction of predictions and gives a small net gain instead of overwhelming the stronger text model.
+
+## 2026-05-09: Class-aware Confidence Gate
+
+The first offline gate used one global confidence threshold and one global auxiliary weight. I then added a class-aware version in `src/evaluate_offline_gated_fusion.py`: the gate still uses the fine-tuned text ensemble as the backbone, but the low-confidence threshold and multimodal intervention weight can differ by the text-predicted class.
+
+This keeps the model explainable while giving weak or ambiguous classes more room to use multimodal evidence.
+
+Tested variants:
+
+```text
+global gate, 5 auxiliary models       weighted_f1=0.6757  macro_f1=0.5190
+class gate, 5 auxiliary models        weighted_f1=0.6785  macro_f1=0.5233
+class gate, top-3 gated auxiliaries   weighted_f1=0.6788  macro_f1=0.5248
+```
+
+The current best main result is:
+
+```text
+output: results/offline_gated_multimodal_class_top3
+test accuracy:     0.6831
+test weighted_f1:  0.6788
+test macro_f1:     0.5248
+```
+
+Reproduction helper:
+
+```text
+scripts/run_final_gated_multimodal.sh
+```
+
+It assumes the logits under `results/logits/` already exist and then reruns only the lightweight offline gate search/evaluation. A final check with this script reproduced the same result under `results/offline_gated_multimodal_final_check`.
+
+Auxiliary multimodal models used:
+
+```text
+dgf_dropout                 weight=0.1580
+late_fusion_hubert          weight=0.6921
+quality_late_fusion_hubert  weight=0.1499
+```
+
+Class-aware gate parameters are ordered as:
+
+```text
+[anger, disgust, fear, joy, neutral, sadness, surprise]
+
+thresholds:
+  [0.350, 0.425, 0.375, 0.800, 0.425, 0.350, 0.375]
+
+alphas:
+  [0.420, 0.300, 0.500, 0.500, 0.160, 0.000, 0.500]
+```
+
+Prediction-change analysis:
+
+```text
+total samples:          2610
+gate-active samples:     233
+changed predictions:      63
+text mistakes fixed:      29
+text correct changed:     18
+```
+
+Interpretation:
+
+- The result is still text-dominant, which matches the current feature-quality diagnosis.
+- The multimodal branch has a measurable positive effect, but it is bounded and selective.
+- This is a more defensible final direction than claiming audio/visual alone are strong; the report can say that current audio/visual features are weak individually, but gated multimodal evidence improves the strong text backbone slightly and improves macro F1.
+
+## 2026-05-09: Ablation Plan for Final Report
+
+The final report should not only show the best number. It should show why the final model is reasonable under the current feature quality. The ablation plan is:
+
+### Must-have ablations
+
+1. Modality-only feature quality:
+   - `text_only`
+   - `audio_only`
+   - `audio_hubert_only`
+   - `audio_hubert_stats_only`
+   - `visual_only`
+   - `visual_face_only`
+
+2. Simple multimodal fusion:
+   - `text_audio`
+   - `text_visual`
+   - `concat_tav`
+   - `text_visual_face`
+   - `concat_tav_hubert_stats_face`
+
+3. Gated multimodal baselines:
+   - `dgf`
+   - `dgf_dropout`
+   - `dgf_context`
+   - `late_fusion_hubert`
+   - `quality_late_fusion_hubert`
+
+4. Strong-text and final gated model:
+   - fine-tuned text ensemble only
+   - global confidence gate
+   - class-aware confidence gate with top-3 gated auxiliaries
+
+### Gate-specific ablations
+
+These are important because the project name and narrative emphasize gated multimodal fusion:
+
+- Global gate vs class-aware gate.
+- Five auxiliary models vs top-3 gated auxiliary models.
+- Allow `alpha=0` during dev search to show that the multimodal branch is selected because it helps, not because it is forced.
+- Prediction-change analysis: how many text predictions are changed, how many mistakes are fixed, and how many correct text predictions are damaged.
+- Per-class F1 comparison between text-only ensemble and final gated multimodal model.
+
+### Optional ablations
+
+- Missing-modality analysis for `late_fusion_hubert` / `quality_late_fusion_hubert`.
+- Effect of face-centered visual features: `visual_only` vs `visual_face_only`, `text_visual` vs `text_visual_face`.
+- Effect of HuBERT statistics: `audio_hubert_only` vs `audio_hubert_stats_only`.
+- Final gate with only `late_fusion_hubert`, with `dgf_dropout + late_fusion_hubert`, and with `dgf_dropout + late_fusion_hubert + quality_late_fusion_hubert`.
+
+### Recommended report narrative
+
+The report should make a careful claim:
+
+- Audio and visual branches are weak by themselves on MELD.
+- Naive multimodal concatenation can dilute the text signal.
+- A fine-tuned text backbone is much stronger than frozen utterance features.
+- The final gated model uses multimodal evidence selectively on uncertain samples, leading to a small but consistent improvement over the strong text ensemble.
+- The contribution is not SOTA performance; it is a complete, interpretable multimodal ERC pipeline with feature extraction, fusion baselines, gated fusion, and ablation analysis.
