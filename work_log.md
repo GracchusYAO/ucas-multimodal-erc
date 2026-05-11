@@ -1147,3 +1147,449 @@ The report should make a careful claim:
 - A fine-tuned text backbone is much stronger than frozen utterance features.
 - The final gated model uses multimodal evidence selectively on uncertain samples, leading to a small but consistent improvement over the strong text ensemble.
 - The contribution is not SOTA performance; it is a complete, interpretable multimodal ERC pipeline with feature extraction, fusion baselines, gated fusion, and ablation analysis.
+
+## 2026-05-09: Tomorrow's Capacity Check
+
+Question to revisit:
+
+The current gated multimodal models project text/audio/visual features into `d_model=256`. This is mainly for modality alignment, parameter control, and reducing noisy weak-modality influence. It is not because HuBERT/CLIP embeddings become sparse without compression; they are dense vectors.
+
+However, `256` may still be too aggressive. Tomorrow's first task should be a small capacity ablation:
+
+```text
+d_model = 128
+d_model = 256
+d_model = 512
+```
+
+Priority models:
+
+- `late_fusion_hubert`
+- `quality_late_fusion_hubert`
+- possibly `dgf_dropout`
+
+What to check:
+
+- dev/test weighted F1 and macro F1
+- whether larger `d_model` improves audio/visual contribution
+- whether larger `d_model` overfits faster
+- whether gate weights become less text-dominant or simply noisier
+
+If `512` improves F1 without obvious overfitting, then the current `256` bottleneck is probably too tight. If `256` remains best or most stable, keep it and describe it as a reasonable capacity-control choice for MELD-scale training.
+
+## 2026-05-10: d_model Capacity Ablation
+
+Ran the planned `d_model` capacity ablation for the main gated multimodal models.
+
+Configs added:
+
+```text
+configs/late_fusion_hubert_d128.yaml
+configs/late_fusion_hubert_d512.yaml
+configs/quality_late_fusion_hubert_d128.yaml
+configs/quality_late_fusion_hubert_d512.yaml
+configs/dgf_dropout_d128.yaml
+configs/dgf_dropout_d512.yaml
+```
+
+Training and evaluation logs:
+
+```text
+logs/train_late_fusion_hubert_d128.log
+logs/train_late_fusion_hubert_d512.log
+logs/train_quality_late_fusion_hubert_d128.log
+logs/train_quality_late_fusion_hubert_d512.log
+logs/train_dgf_dropout_d128.log
+logs/train_dgf_dropout_d512.log
+logs/evaluate_capacity_late_quality.log
+logs/evaluate_capacity_dgf_dropout.log
+```
+
+### Capacity ablation result
+
+```text
+late_fusion_hubert:
+  d_model=128  dev_wf1=0.5543  test_wf1=0.5544  test_macro=0.4071
+  d_model=256  dev_wf1=0.5673  test_wf1=0.5858  test_macro=0.4234
+  d_model=512  dev_wf1=0.5757  test_wf1=0.5780  test_macro=0.4225
+
+quality_late_fusion_hubert:
+  d_model=128  dev_wf1=0.5313  test_wf1=0.5571  test_macro=0.4040
+  d_model=256  dev_wf1=0.5572  test_wf1=0.5779  test_macro=0.4241
+  d_model=512  dev_wf1=0.5716  test_wf1=0.5981  test_macro=0.4390
+
+dgf_dropout:
+  d_model=128  dev_wf1=0.5516  test_wf1=0.5635  test_macro=0.4087
+  d_model=256  dev_wf1=0.5675  test_wf1=0.5903  test_macro=0.4263
+  d_model=512  dev_wf1=0.5802  test_wf1=0.5754  test_macro=0.4177
+```
+
+Interpretation:
+
+- `d_model=128` is too small for all three gated multimodal models.
+- `d_model=512` improves dev F1 for all three models, but only `quality_late_fusion_hubert` converts this into a better test result.
+- `quality_late_fusion_hubert_d512` becomes the strongest frozen-feature multimodal model so far: `test weighted_f1=0.5981`, beating the previous `dgf_dropout` baseline `0.5903`.
+- For `late_fusion_hubert` and `dgf_dropout`, `512` looks less stable: dev improves, but test drops compared with `256`. This suggests some overfitting or less useful gate behavior.
+- The answer to yesterday's question is therefore nuanced: `256` is not universally too tight, but it is too restrictive for the quality-aware late-fusion model.
+
+### Effect on final offline gated model
+
+Exported new logits:
+
+```text
+results/logits/late_fusion_hubert_d512/
+results/logits/quality_late_fusion_hubert_d512/
+```
+
+Tried replacing the final auxiliary models:
+
+```text
+original top-3 auxiliaries:
+  [dgf_dropout, late_fusion_hubert, quality_late_fusion_hubert]
+  test weighted_f1=0.6788  macro_f1=0.5248
+
+replace quality with quality_d512:
+  [dgf_dropout, late_fusion_hubert, quality_late_fusion_hubert_d512]
+  test weighted_f1=0.6746  macro_f1=0.5178
+
+replace late and quality with d512 versions:
+  [dgf_dropout, late_fusion_hubert_d512, quality_late_fusion_hubert_d512]
+  test weighted_f1=0.6765  macro_f1=0.5218
+
+add quality_d512 as an extra auxiliary:
+  [dgf_dropout, late_fusion_hubert, quality_late_fusion_hubert, quality_late_fusion_hubert_d512]
+  test weighted_f1=0.6770  macro_f1=0.5186
+```
+
+Conclusion:
+
+The larger quality-aware model is a stronger standalone multimodal baseline, but it does not improve the final offline gate ensemble. The most likely explanation is that `quality_late_fusion_hubert_d512` is stronger but less complementary to the text ensemble / existing auxiliary mix. Therefore:
+
+- Keep `quality_late_fusion_hubert_d512` as the best frozen-feature multimodal baseline.
+- Keep the current final model `offline_gated_multimodal_class_top3` as the main final result.
+- In the report, use this as a capacity ablation: more capacity can help, but only when the gate has quality/missing-modality signals; simply increasing all fusion dimensions does not guarantee better generalization.
+
+## 2026-05-10: Asymmetric Modality Capacity Trial
+
+Revisited the capacity question from a more modality-aware angle. The concern was not only whether `d_model=256` is too small, but whether text/audio/visual should be forced into the same projection dimension at all.
+
+Implemented support for asymmetric projection dimensions in `LateFusionHubertClassifier` and `QualityLateFusionHubertClassifier`:
+
+```text
+d_model_text
+d_model_audio
+d_model_visual
+```
+
+Also added `AsymmetricQualityLogitFusionClassifier`, where each modality branch can have a different hidden size, but the gate only sees three sets of logits plus quality flags. This avoids feeding very large modality hidden vectors directly into the gate.
+
+Configs tried:
+
+```text
+configs/quality_late_fusion_hubert_asym_av512.yaml
+configs/quality_late_fusion_hubert_face_asym_av512.yaml
+configs/quality_late_fusion_hubert_stats_face_asym.yaml
+configs/quality_late_fusion_hubert_asym_t384_a768_v512.yaml
+configs/asym_quality_logit_hubert_t384_a768_v512.yaml
+configs/asym_quality_logit_hubert_stats_face.yaml
+```
+
+Results:
+
+```text
+quality_late_fusion_hubert_asym_av512
+  text=256 audio=512 visual=512
+  test weighted_f1=0.5859  macro_f1=0.4343
+
+quality_late_fusion_hubert_face_asym_av512
+  text=256 audio=512 visual_face=512
+  test weighted_f1=0.5778  macro_f1=0.4216
+
+quality_late_fusion_hubert_stats_face_asym
+  text=256 audio_stats=768 visual_face=512
+  test weighted_f1=0.5492  macro_f1=0.3904
+
+quality_late_fusion_hubert_asym_t384_a768_v512
+  text=384 audio=768 visual=512
+  test weighted_f1=0.5689  macro_f1=0.4060
+
+asym_quality_logit_hubert_t384_a768_v512
+  text=384 audio=768 visual=512, gate on logits + quality
+  test weighted_f1=0.5922  macro_f1=0.4359
+
+asym_quality_logit_hubert_stats_face
+  text=384 audio_stats=768 visual_face=512, gate on logits + quality
+  test weighted_f1=0.5803  macro_f1=0.4321
+```
+
+Final offline gate with `asym_quality_logit_hubert_t384_a768_v512` as an extra auxiliary:
+
+```text
+results/offline_gated_multimodal_class_plus_asym_logit
+test weighted_f1=0.6758
+test macro_f1=0.5199
+```
+
+Conclusion:
+
+- The asymmetric idea is conceptually reasonable, but the tested asymmetric variants do not beat `quality_late_fusion_hubert_d512` (`test weighted_f1=0.5981`) as standalone frozen multimodal models.
+- The best asymmetric variant is `asym_quality_logit_hubert_t384_a768_v512` with `test weighted_f1=0.5922`, slightly above old `dgf_dropout` but below `quality_late_fusion_hubert_d512`.
+- Adding the asymmetric model into the final offline gate does not improve the final text-dominant result (`0.6758` vs current best `0.6788`).
+- For final reporting, the strongest defensible story is still:
+  1. Do not compress everything to 128 or 256 blindly.
+  2. Higher capacity helps when combined with quality-aware gating (`quality_late_fusion_hubert_d512 = 0.5981`).
+  3. Simply making audio/visual branches wider is not enough; the modality features themselves remain noisy, and the final text-dominant offline gate remains best overall.
+
+## 2026-05-10: Attempts to Increase Multimodal Gain over Frozen Text-only
+
+Goal:
+
+Focus on improving the project-designed multimodal structure against frozen `text_only`, ignoring fine-tuned text for the moment. The baseline to beat is:
+
+```text
+frozen text_only  test weighted_f1=0.5722  macro_f1=0.4158
+```
+
+### Branch auxiliary loss
+
+Added support for branch auxiliary loss in `src/train.py` and `src/models/fusion.py`. For late-fusion models, the fused output still receives the main loss, but the text/audio/visual branch logits also receive an auxiliary classification loss:
+
+```text
+loss = fused_loss + auxiliary_loss_weight * mean(branch_losses)
+```
+
+Tried:
+
+```text
+quality_late_fusion_hubert_d512_aux02  auxiliary_loss_weight=0.2
+  test weighted_f1=0.5889  macro_f1=0.4274
+
+quality_late_fusion_hubert_d512_aux05  auxiliary_loss_weight=0.5
+  test weighted_f1=0.5957  macro_f1=0.4372
+```
+
+This did not beat the no-auxiliary-loss model:
+
+```text
+quality_late_fusion_hubert_d512
+  test weighted_f1=0.5981  macro_f1=0.4390
+```
+
+Conclusion: auxiliary branch supervision is reasonable, but in the current setup it does not improve the best structure.
+
+### Frozen text-only as main trunk with multimodal gate
+
+Exported frozen text-only logits and evaluated offline gated fusion without any fine-tuned text model.
+
+Results:
+
+```text
+frozen text_only + [dgf_dropout, late_fusion_hubert, quality_d512, asym_quality_logit]
+  test weighted_f1=0.5951  macro_f1=0.4343
+
+frozen text_only + quality_d512 only
+  test weighted_f1=0.5926  macro_f1=0.4365
+```
+
+These are both better than frozen `text_only=0.5722`, but still do not beat standalone `quality_late_fusion_hubert_d512=0.5981`.
+
+### Current answer to the structural question
+
+The best project-designed frozen-feature multimodal structure remains:
+
+```text
+quality_late_fusion_hubert_d512
+test accuracy:     0.5828
+test weighted_f1:  0.5981
+test macro_f1:     0.4390
+```
+
+Improvement over frozen text-only:
+
+```text
+accuracy:     0.5487 -> 0.5828  (+0.0341)
+weighted_f1:  0.5722 -> 0.5981  (+0.0259)
+macro_f1:     0.4158 -> 0.4390  (+0.0232)
+```
+
+Interpretation:
+
+- The gain over frozen text-only is real and larger than the final fine-tuned-text gate gain.
+- However, it is still not a huge margin. The limiting factor is likely audio/visual feature quality, not only fusion architecture.
+- Tested asymmetric capacity and branch auxiliary losses did not surpass the simpler `quality_late_fusion_hubert_d512`.
+- For the report, the strongest claim should be: quality-aware gated multimodal fusion with sufficient capacity gives a clear improvement over frozen text-only and simple fusion, but current audio/visual features are not strong enough to create a dramatic jump.
+
+## 2026-05-11: Audio-first Feature Improvement
+
+Goal:
+
+Start from the audio modality itself. The previous conclusion was that simply changing the fusion layer or branch width was not enough, so this round adds more emotion-related acoustic information before fusion.
+
+### Added prosody/acoustic features
+
+New scripts:
+
+```text
+src/extract_audio_prosody_features.py
+src/combine_audio_features.py
+```
+
+The prosody extractor creates 115-dimensional acoustic features from each mp4 audio track:
+
+- MFCC statistics
+- RMS energy
+- zero-crossing rate
+- spectral centroid / bandwidth / rolloff / flatness
+- pitch and pitch-delta statistics
+- duration, peak amplitude, silence ratio
+
+The features are standardized with train split statistics, then combined with HuBERT:
+
+```text
+audio_hubert:          768 dim
+audio_prosody:         115 dim
+audio_hubert_prosody:  883 dim
+```
+
+Extraction result:
+
+```text
+features/audio_prosody/train.pt         (9989, 115), available=9988
+features/audio_prosody/dev.pt           (1109, 115), available=1108
+features/audio_prosody/test.pt          (2610, 115), available=2610
+
+features/audio_hubert_prosody/train.pt  (9989, 883), available=9988
+features/audio_hubert_prosody/dev.pt    (1109, 883), available=1108
+features/audio_hubert_prosody/test.pt   (2610, 883), available=2610
+```
+
+New missing/decode issue:
+
+```text
+train:dia125_utt3  audio decode failed
+dev:dia110_utt7    official missing video/audio
+```
+
+### Audio experiment results
+
+```text
+audio_prosody_only
+  test accuracy=0.2575  weighted_f1=0.2844  macro_f1=0.1984
+
+audio_hubert_prosody_only
+  test accuracy=0.3123  weighted_f1=0.3406  macro_f1=0.2398
+```
+
+Interpretation:
+
+- Prosody alone is weak, but not random.
+- HuBERT + prosody is stronger than prosody alone and gives the audio branch more emotion-related information.
+
+### Multimodal experiments with enhanced audio
+
+```text
+concat_tav_hubert_prosody
+  test accuracy=0.5284  weighted_f1=0.5533  macro_f1=0.3913
+
+quality_late_fusion_hubert_prosody_d512
+  test accuracy=0.5536  weighted_f1=0.5728  macro_f1=0.4129
+
+quality_late_fusion_hubert_prosody_guarded
+  test accuracy=0.5448  weighted_f1=0.5719  macro_f1=0.4226
+
+asym_quality_logit_hubert_prosody
+  test accuracy=0.5655  weighted_f1=0.5895  macro_f1=0.4344
+```
+
+Current diagnosis:
+
+- The enhanced audio branch improved audio-only modeling, but naive multimodal use still overfits.
+- In `quality_late_fusion_hubert_prosody_d512`, the test gate average was roughly text `0.7319`, audio `0.2067`, visual `0.0614`. The model is using audio, but the audio branch is not reliable enough to receive that much weight on every sample.
+- `asym_quality_logit_hubert_prosody` is more stable than the high-dimensional quality gate, but still does not beat the current best frozen multimodal model:
+
+```text
+quality_late_fusion_hubert_d512
+  test weighted_f1=0.5981  macro_f1=0.4390
+```
+
+Next step:
+
+Export the new `asym_quality_logit_hubert_prosody` logits and test whether it provides complementary value in the final offline gate. If it does not, the next design should be confidence-aware audio gating rather than continuing to enlarge audio features.
+
+## 2026-05-11: Project Scope Cleanup and Audio Head Check
+
+Added:
+
+```text
+project_scope.md
+single_modality_improvement_plan.md
+```
+
+Purpose:
+
+- separate the clean course-project mainline from side branches;
+- demote fine-tuned text ensemble and offline gate to appendix/discussion;
+- keep the main claim focused on frozen-feature multimodal gated fusion.
+
+Also updated `.gitignore`:
+
+```text
+logs/
+*.pdf
+```
+
+### Mainline decision
+
+The report should focus on:
+
+```text
+text_only
+audio_hubert_only
+visual_only
+concat_tav
+dgf_dropout
+quality_late_fusion_hubert_d512
+```
+
+Fine-tuned text and offline gate are useful analysis tools, but not the main model.
+
+### Audio MLP check
+
+Added a slightly deeper audio-only MLP to test whether the weak audio branch was caused by an overly shallow classifier head.
+
+Configs:
+
+```text
+configs/audio_hubert_mlp.yaml
+configs/audio_hubert_stats_mlp.yaml
+configs/audio_hubert_prosody_mlp.yaml
+```
+
+Results:
+
+```text
+audio_hubert_mlp
+  test weighted_f1=0.3240  macro_f1=0.2205
+
+audio_hubert_stats_mlp
+  test weighted_f1=0.2299  macro_f1=0.1812
+
+audio_hubert_prosody_mlp
+  test weighted_f1=0.3321  macro_f1=0.2238
+```
+
+Compared with previous shallow heads:
+
+```text
+audio_hubert_only          weighted_f1=0.3185
+audio_hubert_stats_only    weighted_f1=0.3350
+audio_hubert_prosody_only  weighted_f1=0.3406
+```
+
+Conclusion:
+
+The audio branch is not mainly limited by classifier depth. Deeper MLP heads mostly overfit or destabilize training. Do not merge these audio MLPs into the main gated model.
+
+Next direction:
+
+Improve the non-text modalities by better features, especially visual expression-oriented features. If that is not feasible, use context-aware frozen text as a clean stronger baseline and compare the gated model fairly against that stronger text-only baseline.

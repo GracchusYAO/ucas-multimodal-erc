@@ -29,6 +29,36 @@ class SingleModalityClassifier(nn.Module):
         return self.classifier(feature.float())  # 确保输入是 float tensor
 
 
+class DeepSingleModalityClassifier(nn.Module):
+    """稍强一点的单模态 MLP，用来检查分支能力是否被分类头限制。"""
+
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dims: tuple[int, ...] = (512, 256),
+        dropout: float = 0.4,
+        num_classes: int = 7,
+    ) -> None:
+        super().__init__()
+        layers: list[nn.Module] = []
+        previous_dim = input_dim
+        for hidden_dim in hidden_dims:
+            layers.extend(
+                [
+                    nn.Linear(previous_dim, hidden_dim),  # 逐步压缩，而不是一次压得太狠
+                    nn.LayerNorm(hidden_dim),
+                    nn.GELU(),
+                    nn.Dropout(dropout),
+                ]
+            )
+            previous_dim = hidden_dim
+        layers.append(nn.Linear(previous_dim, num_classes))
+        self.classifier = nn.Sequential(*layers)
+
+    def forward(self, feature: torch.Tensor) -> torch.Tensor:
+        return self.classifier(feature.float())
+
+
 class TextOnlyClassifier(SingleModalityClassifier):
     """Text-only baseline：RoBERTa 特征 -> MLP -> 情绪分类。"""
 
@@ -43,6 +73,26 @@ class AudioHubertOnlyClassifier(SingleModalityClassifier):
 
 class AudioHubertStatsOnlyClassifier(SingleModalityClassifier):
     """Audio-only baseline：HuBERT mean+std 特征 -> MLP -> 情绪分类。"""
+
+
+class AudioProsodyOnlyClassifier(SingleModalityClassifier):
+    """Audio-only baseline：MFCC/prosody/spectral 统计特征 -> MLP -> 情绪分类。"""
+
+
+class AudioHubertProsodyOnlyClassifier(SingleModalityClassifier):
+    """Audio-only baseline：HuBERT + prosody 拼接特征 -> MLP -> 情绪分类。"""
+
+
+class AudioHubertDeepClassifier(DeepSingleModalityClassifier):
+    """更强音频 baseline：HuBERT 特征 -> deeper MLP。"""
+
+
+class AudioHubertStatsDeepClassifier(DeepSingleModalityClassifier):
+    """更强音频 baseline：HuBERT mean+std 特征 -> deeper MLP。"""
+
+
+class AudioHubertProsodyDeepClassifier(DeepSingleModalityClassifier):
+    """更强音频 baseline：HuBERT + prosody 特征 -> deeper MLP。"""
 
 
 class VisualOnlyClassifier(SingleModalityClassifier):
@@ -88,6 +138,10 @@ class TextAudioHubertClassifier(ConcatClassifier):
 
 class TextAudioHubertStatsClassifier(ConcatClassifier):
     """Text+HuBERT mean+std audio concat baseline。"""
+
+
+class TextAudioHubertProsodyClassifier(ConcatClassifier):
+    """Text+HuBERT+prosody audio concat baseline。"""
 
 
 class TextVisualClassifier(ConcatClassifier):
@@ -142,6 +196,69 @@ def build_audio_hubert_stats_only_model(config: dict | None = None) -> AudioHube
         input_dim=int(config.get("output_dim_audio_hubert_stats", config.get("output_dim_audio_hubert", 1536))),
         projection_dim=int(config.get("projection_dim", 256)),
         dropout=float(config.get("dropout", 0.3)),
+        num_classes=int(config.get("num_classes", 7)),
+    )
+
+
+def build_audio_prosody_only_model(config: dict | None = None) -> AudioProsodyOnlyClassifier:
+    """按 YAML 配置构造 prosody audio-only baseline。"""
+    config = config or {}
+    return AudioProsodyOnlyClassifier(
+        input_dim=int(config.get("output_dim_audio_prosody", 115)),
+        projection_dim=int(config.get("projection_dim", 256)),
+        dropout=float(config.get("dropout", 0.3)),
+        num_classes=int(config.get("num_classes", 7)),
+    )
+
+
+def build_audio_hubert_prosody_only_model(config: dict | None = None) -> AudioHubertProsodyOnlyClassifier:
+    """按 YAML 配置构造 HuBERT+prosody audio-only baseline。"""
+    config = config or {}
+    return AudioHubertProsodyOnlyClassifier(
+        input_dim=int(config.get("output_dim_audio_hubert_prosody", config.get("output_dim_audio_hubert", 883))),
+        projection_dim=int(config.get("projection_dim", 256)),
+        dropout=float(config.get("dropout", 0.3)),
+        num_classes=int(config.get("num_classes", 7)),
+    )
+
+
+def read_hidden_dims(config: dict, default: tuple[int, ...] = (512, 256)) -> tuple[int, ...]:
+    """从 YAML 读取 hidden_dims；没有配置时用简单两层 MLP。"""
+    value = config.get("hidden_dims", default)
+    if isinstance(value, int):
+        return (int(value),)
+    return tuple(int(item) for item in value)
+
+
+def build_audio_hubert_mlp_model(config: dict | None = None) -> AudioHubertDeepClassifier:
+    """按 YAML 配置构造更强 HuBERT audio-only baseline。"""
+    config = config or {}
+    return AudioHubertDeepClassifier(
+        input_dim=int(config.get("output_dim_audio_hubert", 768)),
+        hidden_dims=read_hidden_dims(config),
+        dropout=float(config.get("dropout", 0.4)),
+        num_classes=int(config.get("num_classes", 7)),
+    )
+
+
+def build_audio_hubert_stats_mlp_model(config: dict | None = None) -> AudioHubertStatsDeepClassifier:
+    """按 YAML 配置构造更强 HuBERT mean+std audio-only baseline。"""
+    config = config or {}
+    return AudioHubertStatsDeepClassifier(
+        input_dim=int(config.get("output_dim_audio_hubert_stats", config.get("output_dim_audio_hubert", 1536))),
+        hidden_dims=read_hidden_dims(config),
+        dropout=float(config.get("dropout", 0.4)),
+        num_classes=int(config.get("num_classes", 7)),
+    )
+
+
+def build_audio_hubert_prosody_mlp_model(config: dict | None = None) -> AudioHubertProsodyDeepClassifier:
+    """按 YAML 配置构造更强 HuBERT+prosody audio-only baseline。"""
+    config = config or {}
+    return AudioHubertProsodyDeepClassifier(
+        input_dim=int(config.get("output_dim_audio_hubert_prosody", config.get("output_dim_audio_hubert", 883))),
+        hidden_dims=read_hidden_dims(config),
+        dropout=float(config.get("dropout", 0.4)),
         num_classes=int(config.get("num_classes", 7)),
     )
 
@@ -210,6 +327,20 @@ def build_text_audio_hubert_stats_model(config: dict | None = None) -> TextAudio
     )
 
 
+def build_text_audio_hubert_prosody_model(config: dict | None = None) -> TextAudioHubertProsodyClassifier:
+    """按 YAML 配置构造 text+HuBERT+prosody audio concat baseline。"""
+    config = config or {}
+    return TextAudioHubertProsodyClassifier(
+        input_dims=(
+            int(config.get("output_dim_text", 768)),
+            int(config.get("output_dim_audio_hubert_prosody", config.get("output_dim_audio_hubert", 883))),
+        ),
+        projection_dim=int(config.get("projection_dim", 256)),
+        dropout=float(config.get("dropout", 0.3)),
+        num_classes=int(config.get("num_classes", 7)),
+    )
+
+
 def build_text_visual_model(config: dict | None = None) -> TextVisualClassifier:
     """按 YAML 配置构造 text+visual concat baseline。"""
     config = config or {}
@@ -244,7 +375,11 @@ def build_concat_tav_model(config: dict | None = None) -> ConcatTAVClassifier:
     modalities = config.get("modalities", {})
 
     # 这里根据配置自动选音频维度，方便比较普通 audio / HuBERT / HuBERT mean+std。
-    if modalities.get("audio_hubert_stats", False):
+    if modalities.get("audio_hubert_prosody", False):
+        audio_dim = int(config.get("output_dim_audio_hubert_prosody", config.get("output_dim_audio_hubert", 883)))
+    elif modalities.get("audio_prosody", False):
+        audio_dim = int(config.get("output_dim_audio_prosody", 115))
+    elif modalities.get("audio_hubert_stats", False):
         audio_dim = int(config.get("output_dim_audio_hubert_stats", 1536))
     elif modalities.get("audio_hubert", False):
         audio_dim = int(config.get("output_dim_audio_hubert", 768))
@@ -281,6 +416,16 @@ def build_baseline_model(config: dict | None = None) -> nn.Module:
         return build_audio_hubert_only_model(config)
     if model_name == "audio_hubert_stats_only":
         return build_audio_hubert_stats_only_model(config)
+    if model_name == "audio_prosody_only":
+        return build_audio_prosody_only_model(config)
+    if model_name == "audio_hubert_prosody_only":
+        return build_audio_hubert_prosody_only_model(config)
+    if model_name == "audio_hubert_mlp":
+        return build_audio_hubert_mlp_model(config)
+    if model_name == "audio_hubert_stats_mlp":
+        return build_audio_hubert_stats_mlp_model(config)
+    if model_name == "audio_hubert_prosody_mlp":
+        return build_audio_hubert_prosody_mlp_model(config)
     if model_name == "visual_only":
         return build_visual_only_model(config)
     if model_name == "visual_face_only":
@@ -291,6 +436,8 @@ def build_baseline_model(config: dict | None = None) -> nn.Module:
         return build_text_audio_hubert_model(config)
     if model_name == "text_audio_hubert_stats":
         return build_text_audio_hubert_stats_model(config)
+    if model_name == "text_audio_hubert_prosody":
+        return build_text_audio_hubert_prosody_model(config)
     if model_name == "text_visual":
         return build_text_visual_model(config)
     if model_name == "text_visual_face":

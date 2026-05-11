@@ -20,6 +20,8 @@ MODALITY_DIRS = {
     "audio": "audio_wav2vec2",
     "audio_hubert": "audio_hubert",
     "audio_hubert_stats": "audio_hubert_stats",
+    "audio_prosody": "audio_prosody",
+    "audio_hubert_prosody": "audio_hubert_prosody",
     "visual": "visual_clip",
     "visual_face": "visual_face_clip",
 }

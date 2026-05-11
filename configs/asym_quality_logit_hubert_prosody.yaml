@@ -1,0 +1,36 @@
+model_name: asym_quality_logit_fusion
+
+modalities:
+  text: true
+  audio: false
+  audio_hubert: false
+  audio_hubert_stats: false
+  audio_prosody: false
+  audio_hubert_prosody: true
+  visual: true
+
+output_dim_text: 768
+output_dim_audio_hubert: 883
+output_dim_visual: 512
+d_model: 256
+d_model_text: 384
+d_model_audio: 512
+d_model_visual: 512
+projection_dropout: 0.3
+use_layernorm: true
+gate_hidden_dim: 64
+gate_dropout: 0.25
+text_gate_bias: 1.2
+use_quality_dropout: true
+drop_text_p: 0.05
+drop_audio_p: 0.20
+drop_visual_p: 0.25
+num_classes: 7
+
+optimizer: adamw
+learning_rate: 0.0001
+weight_decay: 0.0001
+batch_size_utterance: 64
+max_epochs: 60
+early_stopping_patience: 8
+seed: 114514

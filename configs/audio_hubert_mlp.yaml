@@ -1,0 +1,24 @@
+model_name: audio_hubert_mlp
+modalities:
+  text: false
+  audio: false
+  audio_hubert: true
+  audio_hubert_stats: false
+  audio_prosody: false
+  audio_hubert_prosody: false
+  visual: false
+
+output_dim_audio_hubert: 768
+batch_size_utterance: 64
+
+hidden_dims: [512, 256]
+dropout: 0.4
+num_classes: 7
+
+optimizer: adamw
+learning_rate: 0.00008
+weight_decay: 0.0002
+max_epochs: 60
+early_stopping_patience: 8
+loss: weighted_cross_entropy
+seed: 114514

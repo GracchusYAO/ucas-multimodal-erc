@@ -6,21 +6,13 @@ import argparse
 import csv
 import json
 import os
+import random
 from pathlib import Path
 
 from src.torch_import_patch import patch_inspect_for_torch, restore_common_builtins, stub_torch_dynamo
 
 restore_common_builtins()
 patch_inspect_for_torch()
-
-from sklearn.metrics import (
-    accuracy_score,
-    classification_report,
-    confusion_matrix,
-    f1_score,
-)
-
-restore_common_builtins()
 
 import torch
 
@@ -34,7 +26,6 @@ restore_common_builtins()
 from src.dataset import ID2EMOTION, MELD_SPLITS
 from src.feature_dataset import make_dialogue_loader, make_feature_loader
 from src.models import build_model
-from src.train import active_modalities, build_quality_tensor, choose_device, set_seed
 
 
 LABEL_IDS = list(range(len(ID2EMOTION)))
@@ -48,6 +39,45 @@ GATED_MODELS = {
     "late_fusion_hubert_stats",
     "quality_late_fusion_hubert",
 }
+
+
+def active_modalities(config: dict) -> tuple[str, ...]:
+    """从 config 里读出当前模型使用哪些模态。"""
+    enabled = config.get("modalities", {"text": True})
+    names = (
+        "text",
+        "audio",
+        "audio_hubert",
+        "audio_hubert_stats",
+        "audio_prosody",
+        "audio_hubert_prosody",
+        "visual",
+        "visual_face",
+    )
+    return tuple(name for name in names if enabled.get(name, False))
+
+
+def build_quality_tensor(batch: dict, modalities: tuple[str, ...], device: torch.device) -> torch.Tensor:
+    """把各模态 available 标记整理成 [B, M]。"""
+    batch_size = batch["label"].size(0)
+    quality = torch.ones(batch_size, len(modalities), device=device)
+    for index, modality in enumerate(modalities):
+        key = f"{modality}_available"
+        if key in batch:
+            quality[:, index] = batch[key].to(device).float()
+    return quality
+
+
+def choose_device(device: str | None) -> torch.device:
+    if device:
+        return torch.device(device)
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def set_seed(seed: int) -> None:
+    random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
 
 def load_config(path: str | Path) -> dict:
@@ -138,26 +168,27 @@ def collect_predictions(
 
 
 def build_metrics(gold_labels: list[int], predictions: list[int]) -> dict:
-    report = classification_report(
-        gold_labels,
-        predictions,
-        labels=LABEL_IDS,
-        target_names=LABEL_NAMES,
-        output_dict=True,
-        zero_division=0,
-    )
+    matrix = confusion_matrix_counts(gold_labels, predictions).float()
+    total = matrix.sum().clamp(min=1.0)
+    true_positive = matrix.diag()
+    support = matrix.sum(dim=1)
+    predicted = matrix.sum(dim=0)
+    precision = true_positive / predicted.clamp(min=1.0)
+    recall = true_positive / support.clamp(min=1.0)
+    f1 = 2 * precision * recall / (precision + recall).clamp(min=1e-12)
+
     return {
-        "accuracy": accuracy_score(gold_labels, predictions),
-        "weighted_f1": f1_score(gold_labels, predictions, average="weighted", zero_division=0),
-        "macro_f1": f1_score(gold_labels, predictions, average="macro", zero_division=0),
+        "accuracy": float(true_positive.sum().item() / total.item()),
+        "weighted_f1": float((f1 * support).sum().item() / total.item()),
+        "macro_f1": float(f1.mean().item()),
         "per_class": {
             name: {
-                "precision": report[name]["precision"],
-                "recall": report[name]["recall"],
-                "f1": report[name]["f1-score"],
-                "support": report[name]["support"],
+                "precision": float(precision[index].item()),
+                "recall": float(recall[index].item()),
+                "f1": float(f1[index].item()),
+                "support": int(support[index].item()),
             }
-            for name in LABEL_NAMES
+            for index, name in enumerate(LABEL_NAMES)
         },
     }
 
@@ -219,7 +250,7 @@ def save_gate_weights(
 
 
 def save_confusion_matrix(output_dir: Path, gold_labels: list[int], predictions: list[int]) -> None:
-    matrix = confusion_matrix(gold_labels, predictions, labels=LABEL_IDS)
+    matrix = confusion_matrix_counts(gold_labels, predictions)
 
     csv_path = output_dir / "confusion_matrix.csv"
     with csv_path.open("w", newline="", encoding="utf-8") as file:
@@ -229,6 +260,15 @@ def save_confusion_matrix(output_dir: Path, gold_labels: list[int], predictions:
             writer.writerow([name, *row.tolist()])
 
     # 当前 WSL/conda 环境里 matplotlib 偶发污染全局状态；评估阶段只保存 CSV。
+
+
+def confusion_matrix_counts(gold_labels: list[int], predictions: list[int]) -> torch.Tensor:
+    """纯 PyTorch 混淆矩阵，避免评估脚本依赖 sklearn/scipy。"""
+    labels = torch.tensor(gold_labels, dtype=torch.long)
+    preds = torch.tensor(predictions, dtype=torch.long)
+    num_classes = len(LABEL_IDS)
+    flat_index = labels * num_classes + preds
+    return torch.bincount(flat_index, minlength=num_classes * num_classes).view(num_classes, num_classes)
 
 
 def evaluate_checkpoint(args: argparse.Namespace) -> dict:
@@ -322,7 +362,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--zero-modality",
         action="append",
-        choices=("text", "audio", "audio_hubert", "audio_hubert_stats", "visual", "visual_face"),
+        choices=(
+            "text",
+            "audio",
+            "audio_hubert",
+            "audio_hubert_stats",
+            "audio_prosody",
+            "audio_hubert_prosody",
+            "visual",
+            "visual_face",
+        ),
     )
     return parser.parse_args()
 

@@ -62,7 +62,16 @@ def class_weights(labels: torch.Tensor, num_classes: int) -> torch.Tensor:
 def active_modalities(config: dict) -> tuple[str, ...]:
     """从 config 里读出当前模型使用哪些模态。"""
     enabled = config.get("modalities", {"text": True})
-    names = ("text", "audio", "audio_hubert", "audio_hubert_stats", "visual", "visual_face")
+    names = (
+        "text",
+        "audio",
+        "audio_hubert",
+        "audio_hubert_stats",
+        "audio_prosody",
+        "audio_hubert_prosody",
+        "visual",
+        "visual_face",
+    )
     return tuple(name for name in names if enabled.get(name, False))
 
 
@@ -72,16 +81,20 @@ def forward_batch(
     modalities: tuple[str, ...],
     device: torch.device,
     use_context: bool,
-) -> torch.Tensor:
+    return_branch_logits: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
     """把 batch 中需要的模态取出来，按顺序喂给模型。"""
     inputs = [batch[modality].to(device) for modality in modalities]  # 按 config 顺序取模态特征
+    use_branch_logits = return_branch_logits and getattr(model, "has_branch_logits", False)
     if getattr(model, "uses_quality", False):
         if use_context:
             raise ValueError("Quality-aware model currently only supports utterance batches.")
         quality = build_quality_tensor(batch, modalities, device)
-        return model(*inputs, quality=quality)
+        return model(*inputs, quality=quality, return_branch_logits=use_branch_logits)
     if use_context:
         return model(*inputs, mask=batch["mask"].to(device))  # dialogue batch 需要 mask
+    if use_branch_logits:
+        return model(*inputs, return_branch_logits=True)
     return model(*inputs)
 
 
@@ -101,14 +114,26 @@ def build_quality_tensor(
 
 
 def batch_loss(
-    logits: torch.Tensor,
+    logits: torch.Tensor | tuple[torch.Tensor, torch.Tensor],
     labels: torch.Tensor,
     criterion: nn.Module,
     mask: torch.Tensor | None = None,
+    auxiliary_loss_weight: float = 0.0,
 ) -> tuple[torch.Tensor, int]:
     """普通 batch 和 dialogue padding batch 共用的 loss 计算。"""
+    branch_logits = None
+    if isinstance(logits, tuple):
+        logits, branch_logits = logits
+
     if mask is None:
-        return criterion(logits, labels), labels.size(0)
+        loss = criterion(logits, labels)
+        item_count = labels.size(0)
+        if branch_logits is not None and auxiliary_loss_weight > 0:
+            branch_count = branch_logits.size(1)
+            repeated_labels = labels.repeat_interleave(branch_count)
+            branch_loss = criterion(branch_logits.flatten(0, 1), repeated_labels)
+            loss = loss + auxiliary_loss_weight * branch_loss  # 逼每个模态分支都学会单独分类
+        return loss, item_count
 
     valid_logits = logits[mask]  # 只取真实 utterance，跳过 padding
     valid_labels = labels[mask]
@@ -123,6 +148,7 @@ def train_one_epoch(
     device: torch.device,
     modalities: tuple[str, ...],
     use_context: bool,
+    auxiliary_loss_weight: float,
 ) -> float:
     model.train()
     total_loss = 0.0
@@ -133,8 +159,15 @@ def train_one_epoch(
         mask = batch["mask"].to(device) if use_context else None
 
         optimizer.zero_grad()
-        logits = forward_batch(model, batch, modalities, device, use_context)
-        loss, item_count = batch_loss(logits, labels, criterion, mask)
+        logits = forward_batch(
+            model,
+            batch,
+            modalities,
+            device,
+            use_context,
+            return_branch_logits=auxiliary_loss_weight > 0,
+        )
+        loss, item_count = batch_loss(logits, labels, criterion, mask, auxiliary_loss_weight)
         loss.backward()
         optimizer.step()
 
@@ -248,6 +281,7 @@ def train_model(args: argparse.Namespace, config: dict) -> None:
     patience = args.patience or int(config.get("early_stopping_patience", 5))
     learning_rate = args.learning_rate or float(config.get("learning_rate", 1e-4))
     weight_decay = args.weight_decay or float(config.get("weight_decay", 1e-4))
+    auxiliary_loss_weight = float(config.get("auxiliary_loss_weight", 0.0))
     num_classes = int(config.get("num_classes", 7))
 
     loader_fn = make_dialogue_loader if use_context else make_feature_loader
@@ -284,6 +318,8 @@ def train_model(args: argparse.Namespace, config: dict) -> None:
     print(f"model={model_name} modalities={modalities} context={use_context} seed={seed}")
     print(f"device={device} train={len(train_loader.dataset)} dev={len(dev_loader.dataset)}")
     print(f"batch_size={batch_size} lr={learning_rate} weight_decay={weight_decay}")
+    if auxiliary_loss_weight > 0:
+        print(f"auxiliary_loss_weight={auxiliary_loss_weight}")
     print(f"log_path={log_path}")
     print(f"best_checkpoint={best_path}")
     print(f"last_checkpoint={last_path}")
@@ -301,6 +337,7 @@ def train_model(args: argparse.Namespace, config: dict) -> None:
             device,
             modalities,
             use_context,
+            auxiliary_loss_weight,
         )
         dev_metrics = evaluate(model, dev_loader, criterion, device, modalities, use_context)
 

@@ -1,0 +1,26 @@
+model_name: concat_tav
+modalities:
+  text: true
+  audio: false
+  audio_hubert: false
+  audio_hubert_stats: false
+  audio_prosody: false
+  audio_hubert_prosody: true
+  visual: true
+
+output_dim_text: 768
+output_dim_audio_hubert_prosody: 883
+output_dim_visual: 512
+batch_size_utterance: 64
+
+projection_dim: 512
+dropout: 0.3
+num_classes: 7
+
+optimizer: adamw
+learning_rate: 0.0001
+weight_decay: 0.0001
+max_epochs: 50
+early_stopping_patience: 5
+loss: weighted_cross_entropy
+seed: 114514

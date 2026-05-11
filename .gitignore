@@ -223,6 +223,8 @@ data/
 features/
 results/
 checkpoints/
+logs/
 runs/
 wandb/
 .torch_cache/
+*.pdf

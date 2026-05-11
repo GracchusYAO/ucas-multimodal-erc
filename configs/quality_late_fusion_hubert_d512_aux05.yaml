@@ -1,0 +1,31 @@
+model_name: quality_late_fusion_hubert
+
+modalities:
+  text: true
+  audio_hubert: true
+  visual: true
+
+output_dim_text: 768
+output_dim_audio_hubert: 768
+output_dim_visual: 512
+d_model: 512
+projection_dropout: 0.35
+use_layernorm: true
+gate_hidden_dim: 128
+gate_dropout: 0.2
+text_gate_bias: 1.2
+use_quality_dropout: true
+drop_text_p: 0.05
+drop_audio_p: 0.25
+drop_visual_p: 0.25
+num_classes: 7
+
+auxiliary_loss_weight: 0.5
+
+optimizer: adamw
+learning_rate: 0.0001
+weight_decay: 0.0001
+batch_size_utterance: 64
+max_epochs: 50
+early_stopping_patience: 5
+seed: 114514

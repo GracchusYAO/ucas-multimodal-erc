@@ -114,12 +114,17 @@ class DynamicGatedFusionClassifier(nn.Module):
 class LateFusionHubertClassifier(nn.Module):
     """Late fusion：text / HuBERT-audio / visual 各自预测，再学习加权融合。"""
 
+    has_branch_logits = True
+
     def __init__(
         self,
         text_dim: int = 768,
         audio_hubert_dim: int = 768,
         visual_dim: int = 512,
         d_model: int = 256,
+        d_model_text: int | None = None,
+        d_model_audio: int | None = None,
+        d_model_visual: int | None = None,
         projection_dropout: float = 0.3,
         use_layernorm: bool = True,
         gate_hidden_dim: int = 128,
@@ -127,16 +132,20 @@ class LateFusionHubertClassifier(nn.Module):
         num_classes: int = 7,
     ) -> None:
         super().__init__()
-        self.text_proj = make_projection(text_dim, d_model, projection_dropout, use_layernorm)
-        self.audio_proj = make_projection(audio_hubert_dim, d_model, projection_dropout, use_layernorm)
-        self.visual_proj = make_projection(visual_dim, d_model, projection_dropout, use_layernorm)
+        d_text = d_model_text or d_model
+        d_audio = d_model_audio or d_model
+        d_visual = d_model_visual or d_model
 
-        self.text_head = nn.Linear(d_model, num_classes)  # 文本单独给出一组 logits
-        self.audio_head = nn.Linear(d_model, num_classes)  # HuBERT 音频单独给出一组 logits
-        self.visual_head = nn.Linear(d_model, num_classes)  # CLIP 视觉单独给出一组 logits
+        self.text_proj = make_projection(text_dim, d_text, projection_dropout, use_layernorm)
+        self.audio_proj = make_projection(audio_hubert_dim, d_audio, projection_dropout, use_layernorm)
+        self.visual_proj = make_projection(visual_dim, d_visual, projection_dropout, use_layernorm)
+
+        self.text_head = nn.Linear(d_text, num_classes)  # 文本单独给出一组 logits
+        self.audio_head = nn.Linear(d_audio, num_classes)  # 音频分支可以保留更大容量
+        self.visual_head = nn.Linear(d_visual, num_classes)  # 视觉分支也不强制等于文本维度
 
         self.gate = nn.Sequential(
-            nn.Linear(d_model * 3, gate_hidden_dim),  # 根据三路表示判断每个模态可信度
+            nn.Linear(d_text + d_audio + d_visual, gate_hidden_dim),  # gate 看非对称三路表示
             nn.ReLU(),
             nn.Dropout(gate_dropout),
             nn.Linear(gate_hidden_dim, 3),
@@ -148,6 +157,7 @@ class LateFusionHubertClassifier(nn.Module):
         audio_hubert: torch.Tensor,
         visual: torch.Tensor,
         return_gate: bool = False,
+        return_branch_logits: bool = False,
     ):
         z_text = self.text_proj(text.float())
         z_audio = self.audio_proj(audio_hubert.float())
@@ -165,6 +175,8 @@ class LateFusionHubertClassifier(nn.Module):
         gate_input = torch.cat([z_text, z_audio, z_visual], dim=1)
         gate_weights = torch.softmax(self.gate(gate_input), dim=1)  # [B, 3]
         fused_logits = (logits * gate_weights.unsqueeze(-1)).sum(dim=1)
+        if return_branch_logits:
+            return fused_logits, logits
         if return_gate:
             return fused_logits, gate_weights
         return fused_logits
@@ -174,6 +186,7 @@ class QualityLateFusionHubertClassifier(nn.Module):
     """Quality-aware late fusion：gate 同时看模态表示和可用性标记。"""
 
     uses_quality = True
+    has_branch_logits = True
 
     def __init__(
         self,
@@ -181,6 +194,9 @@ class QualityLateFusionHubertClassifier(nn.Module):
         audio_hubert_dim: int = 768,
         visual_dim: int = 512,
         d_model: int = 256,
+        d_model_text: int | None = None,
+        d_model_audio: int | None = None,
+        d_model_visual: int | None = None,
         projection_dropout: float = 0.3,
         use_layernorm: bool = True,
         gate_hidden_dim: int = 128,
@@ -193,16 +209,20 @@ class QualityLateFusionHubertClassifier(nn.Module):
         drop_visual_p: float = 0.25,
     ) -> None:
         super().__init__()
-        self.text_proj = make_projection(text_dim, d_model, projection_dropout, use_layernorm)
-        self.audio_proj = make_projection(audio_hubert_dim, d_model, projection_dropout, use_layernorm)
-        self.visual_proj = make_projection(visual_dim, d_model, projection_dropout, use_layernorm)
+        d_text = d_model_text or d_model
+        d_audio = d_model_audio or d_model
+        d_visual = d_model_visual or d_model
 
-        self.text_head = nn.Linear(d_model, num_classes)
-        self.audio_head = nn.Linear(d_model, num_classes)
-        self.visual_head = nn.Linear(d_model, num_classes)
+        self.text_proj = make_projection(text_dim, d_text, projection_dropout, use_layernorm)
+        self.audio_proj = make_projection(audio_hubert_dim, d_audio, projection_dropout, use_layernorm)
+        self.visual_proj = make_projection(visual_dim, d_visual, projection_dropout, use_layernorm)
+
+        self.text_head = nn.Linear(d_text, num_classes)
+        self.audio_head = nn.Linear(d_audio, num_classes)
+        self.visual_head = nn.Linear(d_visual, num_classes)
 
         self.gate = nn.Sequential(
-            nn.Linear(d_model * 3 + 3, gate_hidden_dim),  # 多拼 3 个 availability/quality 标记
+            nn.Linear(d_text + d_audio + d_visual + 3, gate_hidden_dim),  # 表示 + availability 标记
             nn.ReLU(),
             nn.Dropout(gate_dropout),
             nn.Linear(gate_hidden_dim, 3),
@@ -234,6 +254,7 @@ class QualityLateFusionHubertClassifier(nn.Module):
         visual: torch.Tensor,
         quality: torch.Tensor | None = None,
         return_gate: bool = False,
+        return_branch_logits: bool = False,
     ):
         z_text = self.text_proj(text.float())
         z_audio = self.audio_proj(audio_hubert.float())
@@ -257,6 +278,115 @@ class QualityLateFusionHubertClassifier(nn.Module):
         gate_logits = gate_logits.masked_fill(quality <= 0, -1e4)  # 不可用模态不参与加权
         gate_weights = torch.softmax(gate_logits, dim=1)
         fused_logits = (logits * gate_weights.unsqueeze(-1)).sum(dim=1)
+        if return_branch_logits:
+            return fused_logits, logits
+        if return_gate:
+            return fused_logits, gate_weights
+        return fused_logits
+
+
+class AsymmetricQualityLogitFusionClassifier(nn.Module):
+    """非对称分支容量 + logits-level quality gate。
+
+    文本、音频、视觉可以有不同投影维度；每个分支先各自产生 logits。
+    gate 只看三路 logits 和 quality 标记，不直接吃高维表示，减少大分支带来的过拟合。
+    """
+
+    uses_quality = True
+    has_branch_logits = True
+
+    def __init__(
+        self,
+        text_dim: int = 768,
+        audio_hubert_dim: int = 768,
+        visual_dim: int = 512,
+        d_model: int = 256,
+        d_model_text: int | None = None,
+        d_model_audio: int | None = None,
+        d_model_visual: int | None = None,
+        projection_dropout: float = 0.3,
+        use_layernorm: bool = True,
+        gate_hidden_dim: int = 64,
+        gate_dropout: float = 0.2,
+        num_classes: int = 7,
+        text_gate_bias: float = 1.2,
+        use_quality_dropout: bool = True,
+        drop_text_p: float = 0.05,
+        drop_audio_p: float = 0.25,
+        drop_visual_p: float = 0.25,
+    ) -> None:
+        super().__init__()
+        d_text = d_model_text or d_model
+        d_audio = d_model_audio or d_model
+        d_visual = d_model_visual or d_model
+
+        self.text_proj = make_projection(text_dim, d_text, projection_dropout, use_layernorm)
+        self.audio_proj = make_projection(audio_hubert_dim, d_audio, projection_dropout, use_layernorm)
+        self.visual_proj = make_projection(visual_dim, d_visual, projection_dropout, use_layernorm)
+
+        self.text_head = nn.Linear(d_text, num_classes)
+        self.audio_head = nn.Linear(d_audio, num_classes)
+        self.visual_head = nn.Linear(d_visual, num_classes)
+
+        self.gate = nn.Sequential(
+            nn.Linear(num_classes * 3 + 3, gate_hidden_dim),  # 三路 logits + 三个可用性标记
+            nn.ReLU(),
+            nn.Dropout(gate_dropout),
+            nn.Linear(gate_hidden_dim, 3),
+        )
+        with torch.no_grad():
+            self.gate[-1].bias.copy_(torch.tensor([text_gate_bias, 0.0, 0.0]))
+
+        self.use_quality_dropout = use_quality_dropout
+        self.drop_probs = torch.tensor([drop_text_p, drop_audio_p, drop_visual_p])
+
+    def apply_quality_dropout(self, quality: torch.Tensor) -> torch.Tensor:
+        """和 quality late fusion 一样，训练时随机模拟模态缺失。"""
+        if not self.training or not self.use_quality_dropout:
+            return quality
+
+        drop_probs = self.drop_probs.to(quality.device).view(1, 3)
+        keep = torch.rand_like(quality) >= drop_probs
+        keep = keep | (quality <= 0)
+
+        all_dropped = (quality * keep.float()).sum(dim=1) <= 0
+        if all_dropped.any():
+            keep[all_dropped, 0] = True
+        return quality * keep.float()
+
+    def forward(
+        self,
+        text: torch.Tensor,
+        audio_hubert: torch.Tensor,
+        visual: torch.Tensor,
+        quality: torch.Tensor | None = None,
+        return_gate: bool = False,
+        return_branch_logits: bool = False,
+    ):
+        z_text = self.text_proj(text.float())
+        z_audio = self.audio_proj(audio_hubert.float())
+        z_visual = self.visual_proj(visual.float())
+
+        logits = torch.stack(
+            [
+                self.text_head(z_text),
+                self.audio_head(z_audio),
+                self.visual_head(z_visual),
+            ],
+            dim=1,
+        )
+
+        if quality is None:
+            quality = torch.ones(text.size(0), 3, device=text.device)
+        quality = self.apply_quality_dropout(quality.float())
+
+        gate_input = torch.cat([logits.flatten(start_dim=1), quality], dim=1)
+        gate_logits = self.gate(gate_input)
+        gate_logits = gate_logits.masked_fill(quality <= 0, -1e4)
+        gate_weights = torch.softmax(gate_logits, dim=1)
+        fused_logits = (logits * gate_weights.unsqueeze(-1)).sum(dim=1)
+        if return_branch_logits:
+            return fused_logits, logits
         if return_gate:
             return fused_logits, gate_weights
         return fused_logits
@@ -291,6 +421,9 @@ def build_late_fusion_hubert_model(config: dict | None = None) -> LateFusionHube
         audio_hubert_dim=int(config.get("output_dim_audio_hubert", 768)),
         visual_dim=int(config.get("output_dim_visual", 512)),
         d_model=int(config.get("d_model", 256)),
+        d_model_text=int(config.get("d_model_text", config.get("d_model", 256))),
+        d_model_audio=int(config.get("d_model_audio", config.get("d_model", 256))),
+        d_model_visual=int(config.get("d_model_visual", config.get("d_model", 256))),
         projection_dropout=float(config.get("projection_dropout", 0.3)),
         use_layernorm=bool(config.get("use_layernorm", True)),
         gate_hidden_dim=int(config.get("gate_hidden_dim", 128)),
@@ -307,9 +440,36 @@ def build_quality_late_fusion_hubert_model(config: dict | None = None) -> Qualit
         audio_hubert_dim=int(config.get("output_dim_audio_hubert", 768)),
         visual_dim=int(config.get("output_dim_visual", 512)),
         d_model=int(config.get("d_model", 256)),
+        d_model_text=int(config.get("d_model_text", config.get("d_model", 256))),
+        d_model_audio=int(config.get("d_model_audio", config.get("d_model", 256))),
+        d_model_visual=int(config.get("d_model_visual", config.get("d_model", 256))),
         projection_dropout=float(config.get("projection_dropout", 0.3)),
         use_layernorm=bool(config.get("use_layernorm", True)),
         gate_hidden_dim=int(config.get("gate_hidden_dim", 128)),
+        gate_dropout=float(config.get("gate_dropout", 0.2)),
+        num_classes=int(config.get("num_classes", 7)),
+        text_gate_bias=float(config.get("text_gate_bias", 1.2)),
+        use_quality_dropout=bool(config.get("use_quality_dropout", True)),
+        drop_text_p=float(config.get("drop_text_p", 0.05)),
+        drop_audio_p=float(config.get("drop_audio_p", 0.25)),
+        drop_visual_p=float(config.get("drop_visual_p", 0.25)),
+    )
+
+
+def build_asymmetric_quality_logit_fusion_model(config: dict | None = None) -> AsymmetricQualityLogitFusionClassifier:
+    """按 YAML 配置构造非对称分支 + logits gate。"""
+    config = config or {}
+    return AsymmetricQualityLogitFusionClassifier(
+        text_dim=int(config.get("output_dim_text", 768)),
+        audio_hubert_dim=int(config.get("output_dim_audio_hubert", 768)),
+        visual_dim=int(config.get("output_dim_visual", 512)),
+        d_model=int(config.get("d_model", 256)),
+        d_model_text=int(config.get("d_model_text", config.get("d_model", 256))),
+        d_model_audio=int(config.get("d_model_audio", config.get("d_model", 256))),
+        d_model_visual=int(config.get("d_model_visual", config.get("d_model", 256))),
+        projection_dropout=float(config.get("projection_dropout", 0.3)),
+        use_layernorm=bool(config.get("use_layernorm", True)),
+        gate_hidden_dim=int(config.get("gate_hidden_dim", 64)),
         gate_dropout=float(config.get("gate_dropout", 0.2)),
         num_classes=int(config.get("num_classes", 7)),
         text_gate_bias=float(config.get("text_gate_bias", 1.2)),

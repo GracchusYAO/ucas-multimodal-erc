@@ -1,0 +1,24 @@
+model_name: audio_prosody_only
+modalities:
+  text: false
+  audio: false
+  audio_hubert: false
+  audio_hubert_stats: false
+  audio_prosody: true
+  audio_hubert_prosody: false
+  visual: false
+
+output_dim_audio_prosody: 115
+batch_size_utterance: 64
+
+projection_dim: 256
+dropout: 0.3
+num_classes: 7
+
+optimizer: adamw
+learning_rate: 0.0001
+weight_decay: 0.0001
+max_epochs: 50
+early_stopping_patience: 5
+loss: weighted_cross_entropy
+seed: 114514
