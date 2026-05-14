@@ -1593,3 +1593,827 @@ The audio branch is not mainly limited by classifier depth. Deeper MLP heads mos
 Next direction:
 
 Improve the non-text modalities by better features, especially visual expression-oriented features. If that is not feasible, use context-aware frozen text as a clean stronger baseline and compare the gated model fairly against that stronger text-only baseline.
+
+## 2026-05-11: Visual Expression Feature Plan
+
+Added:
+
+```text
+visual_modality_improvement_plan.md
+```
+
+Purpose:
+
+- keep the next visual-modality improvement round focused;
+- replace generic CLIP visual features with FER / affect-oriented expression features;
+- test whether a task-specific visual representation can make the gated multimodal model improve more clearly over `text_only`.
+
+Planned mainline:
+
+```text
+video frames
+-> face crop when possible
+-> expression model feature extraction
+-> visual_expression_only
+-> text_visual_expression
+-> quality_late_fusion_hubert_expression
+```
+
+The key comparison is not simply whether the new visual-only model is high in absolute terms. The more important question is whether expression features give a clearer complementary signal to text:
+
+```text
+text_only
+vs
+text_visual_expression
+vs
+quality_late_fusion_hubert_expression
+```
+
+Success criteria:
+
+```text
+visual_expression_only > visual_face_only
+text_visual_expression > text_only
+quality_late_fusion_hubert_expression >= quality_late_fusion_hubert_d512
+```
+
+The preferred project story is still a clean frozen-feature multimodal system, not fine-tuned text ensemble or offline post-hoc gating.
+
+## 2026-05-11: Visual Expression Feature Extraction
+
+Implemented and ran the first FER-oriented visual feature extractor:
+
+```text
+src/extract_visual_expression_features.py
+```
+
+Feature source:
+
+```text
+trpakov/vit-face-expression
+```
+
+Feature design:
+
+```text
+ViT CLS embedding + expression logits + expression probabilities
+= 768 + 7 + 7
+= 782 dimensions
+```
+
+Extraction pipeline:
+
+```text
+video -> uniform frame sampling -> Haar face crop when possible -> ViT expression model -> utterance-level average
+```
+
+Generated files:
+
+```text
+features/visual_expression/train.pt
+features/visual_expression/dev.pt
+features/visual_expression/test.pt
+```
+
+Observed extraction results:
+
+```text
+train: shape=(9989, 782), available=9988/9989, failed=['train:dia125_utt3']
+dev:   shape=(1109, 782), available=1108/1109, failed=['dev:dia110_utt7']
+test:  shape=(2610, 782), available=2610/2610
+```
+
+Notes:
+
+- `dev:dia110_utt7` is the official missing dev video already documented earlier.
+- `train:dia125_utt3` exists in metadata but did not yield a usable visual feature in this extraction pass, so it remains a zero vector with `available=False`.
+- The extraction had to run in the base conda environment because the `workspace` environment can read videos but has unstable `transformers`/`torchvision` imports. Base environment was updated with `opencv-python-headless` and successfully used GPU.
+
+Next experiment:
+
+```text
+visual_expression_only
+text_visual_expression
+quality_late_fusion_hubert_expression
+```
+
+The first check should be whether `visual_expression_only` beats the old visual baselines:
+
+```text
+visual_only       weighted_f1=0.2724
+visual_face_only  weighted_f1=0.2888
+```
+
+## 2026-05-11: Visual Expression Experiment Results
+
+The FER-oriented visual branch was tested in several forms.
+
+### Full expression feature
+
+Feature:
+
+```text
+768-d ViT CLS embedding + 7-d logits + 7-d probabilities = 782 dims
+```
+
+Results:
+
+| Model | Test Weighted F1 | Test Macro F1 | Note |
+|---|---:|---:|---|
+| `visual_expression_only` | 0.2966 | 0.1807 | slightly better than `visual_face_only`, but still weak |
+| `text_visual_expression` | 0.4227 | 0.2703 | much worse than `text_only`; full embedding hurts text |
+| `quality_late_fusion_hubert_expression` | 0.5620 | 0.4026 | worse than current main model |
+
+Gate observation for `quality_late_fusion_hubert_expression` on test:
+
+```text
+gate_text=0.6457
+gate_audio=0.1293
+gate_visual=0.2250
+```
+
+Interpretation:
+
+The full 782-d expression feature is noisy in MELD. The gate gives it substantial weight, but that hurts final performance.
+
+### Compact expression feature
+
+Derived compact feature:
+
+```text
+7-d expression logits + 7-d expression probabilities = 14 dims
+```
+
+Generated files:
+
+```text
+features/visual_expression_compact/train.pt
+features/visual_expression_compact/dev.pt
+features/visual_expression_compact/test.pt
+```
+
+Results:
+
+| Model | Test Weighted F1 | Test Macro F1 | Note |
+|---|---:|---:|---|
+| `visual_expression_compact_only` | 0.2361 | 0.1414 | too weak alone |
+| `text_visual_expression_compact` | 0.5608 | 0.4118 | close to text-only but not better |
+| `quality_late_fusion_hubert_expression_compact` | 0.5851 | 0.4247 | better than text-only, worse than current main model |
+
+Gate observation for `quality_late_fusion_hubert_expression_compact` on test:
+
+```text
+gate_text=0.8573
+gate_audio=0.1261
+gate_visual=0.0166
+```
+
+Interpretation:
+
+The compact expression signal is weak but less harmful. The quality gate learns to almost ignore it, so the model remains better than text-only but cannot beat the current CLIP-based main model.
+
+### CLIP + compact expression feature
+
+To avoid replacing the existing useful CLIP visual feature, a combined visual feature was also tested:
+
+```text
+512-d CLIP visual + 14-d expression logits/probabilities = 526 dims
+```
+
+Generated files:
+
+```text
+features/visual_clip_expression/train.pt
+features/visual_clip_expression/dev.pt
+features/visual_clip_expression/test.pt
+```
+
+Result:
+
+| Model | Test Weighted F1 | Test Macro F1 | Note |
+|---|---:|---:|---|
+| `quality_late_fusion_hubert_visual_clip_expression` | 0.5841 | 0.4337 | macro improves slightly, weighted F1 still below current main model |
+
+Gate observation on test:
+
+```text
+gate_text=0.7836
+gate_audio=0.0695
+gate_visual=0.1469
+```
+
+Compared with current main model:
+
+```text
+quality_late_fusion_hubert_d512:
+  weighted_f1=0.5981
+  macro_f1=0.4390
+  gate_text=0.7924
+  gate_audio=0.1094
+  gate_visual=0.0982
+```
+
+Conclusion:
+
+FER expression features are not a clean improvement over the existing CLIP visual branch in the current frozen-feature setup. They do give a slightly better visual-only weighted F1 than face-centered CLIP, but once fused with text/audio they either hurt or get ignored.
+
+Current recommendation:
+
+Do not replace the main visual branch with FER expression features. Keep `quality_late_fusion_hubert_d512` as the current main model. The visual-expression experiments can be used as an ablation/negative result:
+
+```text
+task-specific expression features were tested, but MELD visual expression cues were too noisy or too weak to improve the gated multimodal model.
+```
+
+Next useful direction:
+
+If we still want a stronger multimodal story, the next improvement should not be another visual feature concatenation. Better candidates are:
+
+1. context-aware frozen text as a stronger fair baseline;
+2. role/dialogue context modeling;
+3. per-class analysis to show where audio/visual gate helps even if global weighted F1 gain is small.
+
+## 2026-05-11: Context-aware Residual Fusion Design
+
+Added:
+
+```text
+residual_context_fusion_plan.md
+```
+
+New main idea:
+
+```text
+final_logits = text_logits
+             + gate_audio  * audio_delta
+             + gate_visual * visual_delta
+```
+
+This keeps text as the strong base model and lets audio / FER visual features act as gated corrections instead of competing with text in a simple weighted average.
+
+The design also adds dialogue context:
+
+```text
+text/audio/FER visual projections
+-> dialogue-level BiGRU
+-> context-aware text logits and audio/visual residual deltas
+-> residual gated fusion
+```
+
+Why this still counts as fusion:
+
+- gate is computed from text, audio, visual, and dialogue context together;
+- audio and visual directly modify final class logits;
+- gate weights can still be saved and ablated;
+- the model is explicitly designed around the observed weakness of non-text modalities.
+
+First planned config:
+
+```text
+configs/context_residual_gated_fusion_fer.yaml
+```
+
+The visual branch should use FER full expression features for now, because `visual_expression_only` is the strongest visual-only branch tested so far.
+
+### First implementation result
+
+Implemented:
+
+```text
+ContextResidualGatedFusionClassifier
+build_context_residual_gated_fusion_model
+configs/context_residual_gated_fusion_fer.yaml
+```
+
+The model uses:
+
+```text
+text + HuBERT audio + FER visual
+dialogue-level BiGRU context
+text_logits + gated audio_delta + gated visual_delta
+```
+
+Smoke run:
+
+```text
+logs/train_context_residual_gated_fusion_fer_smoke.log
+best dev weighted_f1 after 2 epochs = 0.5139
+```
+
+Full run:
+
+```text
+logs/train_context_residual_gated_fusion_fer.log
+best dev weighted_f1 = 0.5947
+```
+
+Test result:
+
+```text
+context_residual_gated_fusion_fer
+accuracy    = 0.5969
+weighted_f1 = 0.6051
+macro_f1    = 0.4459
+```
+
+This is better than the previous clean main model:
+
+```text
+quality_late_fusion_hubert_d512
+weighted_f1 = 0.5981
+macro_f1    = 0.4390
+```
+
+Quick zero-modality checks on the trained residual model:
+
+| Setting | Test Weighted F1 | Test Macro F1 |
+|---|---:|---:|
+| full text+audio+FER | 0.6051 | 0.4459 |
+| zero audio | 0.5990 | 0.4341 |
+| zero FER visual | 0.6160 | 0.4442 |
+| zero audio+FER visual | 0.5954 | 0.4276 |
+
+Interpretation:
+
+- The new residual-context structure is promising because it beats the previous main model.
+- Removing both non-text modalities drops from `0.6051` to `0.5954`, so the multimodal correction path is contributing.
+- The `zero FER visual` result being higher suggests the FER branch still sometimes over-corrects. The next refinement should make visual correction more conservative, for example:
+  - use sigmoid correction gates instead of softmax correction gates;
+  - initialize audio/visual correction gates lower;
+  - add a smaller visual residual scale;
+  - or train a text+audio context residual version as a cleaner comparison.
+
+## 2026-05-11 LSTM-style Residual Gate
+
+Motivation:
+
+- The previous residual gate used a GRU context encoder and a softmax gate over text/audio/visual.
+- That structure made the three gate values compete with each other, and the FER visual branch could still over-correct text.
+- The new idea is closer to an LSTM-style context memory: first read the dialogue sequence with BiLSTM, then let audio and visual independently decide whether to correct the text logits.
+
+Implemented:
+
+```text
+ContextLSTMResidualGatedFusionClassifier
+build_context_lstm_residual_gated_fusion_model
+configs/context_lstm_residual_gated_fusion_fer.yaml
+```
+
+Main formula:
+
+```text
+final_logits =
+    text_logits
+    + sigmoid(audio_gate)  * audio_residual_scale  * audio_delta
+    + sigmoid(visual_gate) * visual_residual_scale * visual_delta
+```
+
+Current conservative settings:
+
+```text
+audio_gate_bias = -1.0
+visual_gate_bias = -2.0
+audio_residual_scale = 1.0
+visual_residual_scale = 0.4
+```
+
+Smoke run:
+
+```text
+logs/train_context_lstm_residual_gated_fusion_fer_smoke.log
+best dev weighted_f1 after 2 epochs = 0.4538
+```
+
+Full run:
+
+```text
+logs/train_context_lstm_residual_gated_fusion_fer.log
+best dev weighted_f1 = 0.5937
+```
+
+Test result:
+
+```text
+context_lstm_residual_gated_fusion_fer
+accuracy    = 0.5866
+weighted_f1 = 0.5993
+macro_f1    = 0.4273
+```
+
+Zero-modality checks:
+
+| Setting | Test Weighted F1 | Test Macro F1 |
+|---|---:|---:|
+| full text+audio+FER | 0.5993 | 0.4273 |
+| zero audio | 0.5845 | 0.4308 |
+| zero FER visual | 0.5896 | 0.4218 |
+| zero audio+FER visual | 0.5724 | 0.3968 |
+
+Interpretation:
+
+- This design is slightly weaker than the previous GRU residual model on absolute test F1 (`0.5993` vs `0.6051`).
+- But its ablation pattern is cleaner: removing audio or visual both hurts weighted F1, and removing both drops close to the text-only baseline.
+- That means the LSTM + independent residual gate is using both non-text modalities in a more defensible way.
+- The saved gate values are not softmax weights anymore: `gate_text=1` means text is always the base path, while `gate_audio` and `gate_visual` are residual correction strengths.
+- The current gate strengths saturate high, so a next useful refinement is not to add another big module, but to tune correction strength or add light gate regularization.
+
+## 2026-05-11 d_model Dimension Check
+
+Question:
+
+- The cached base features are mostly around 768 dimensions:
+  - text RoBERTa: 768
+  - HuBERT audio: 768
+  - FER visual expression: 782
+- Earlier configs projected all modalities to `d_model=256`, which may be too aggressive for audio/visual.
+- New comparison keeps the same LSTM residual gate structure and only changes `d_model`.
+
+Configs:
+
+```text
+configs/context_lstm_residual_gated_fusion_fer.yaml       d_model=256
+configs/context_lstm_residual_gated_fusion_fer_d512.yaml  d_model=512
+configs/context_lstm_residual_gated_fusion_fer_d768.yaml  d_model=768
+```
+
+Results:
+
+| d_model | Best Dev Weighted F1 | Test Weighted F1 | Test Macro F1 |
+|---:|---:|---:|---:|
+| 256 | 0.5937 | 0.5993 | 0.4273 |
+| 512 | 0.5975 | 0.6012 | 0.4243 |
+| 768 | 0.5865 | 0.5987 | 0.4222 |
+
+Zero-modality results:
+
+| d_model | Full | Zero Audio | Zero FER Visual | Zero Audio+Visual |
+|---:|---:|---:|---:|---:|
+| 256 | 0.5993 | 0.5845 | 0.5896 | 0.5724 |
+| 512 | 0.6012 | 0.5552 | 0.5956 | 0.5404 |
+| 768 | 0.5987 | 0.5935 | 0.5932 | 0.5880 |
+
+Gate averages on test:
+
+| d_model | gate_text | gate_audio | gate_visual |
+|---:|---:|---:|---:|
+| 256 | 1.0000 | 0.9838 | 0.9787 |
+| 512 | 1.0000 | 0.9783 | 0.9844 |
+| 768 | 1.0000 | 0.2335 | 0.5637 |
+
+Interpretation:
+
+- `d_model=512` is currently the best setting for this structure.
+- It slightly improves full test weighted F1 and gives the clearest ablation: removing audio or removing both non-text modalities causes a large drop.
+- `d_model=768` does not help. It appears to become harder to train on the current data size and uses audio much less.
+- The earlier concern was valid: `d_model=256` was probably too compressed, but fully matching the original 768 dimensions is not automatically better.
+- For the current project narrative, `d_model=512` is the cleaner main setting for the LSTM residual gated fusion branch.
+
+## 2026-05-11 Simple Concat Comparison
+
+Question:
+
+- Compare the current main setting against a simple concat baseline using the same cached features:
+  - text RoBERTa 768
+  - HuBERT audio 768
+  - FER visual expression 782
+- To keep the internal width comparable, the concat baseline uses `projection_dim=512`.
+
+Config:
+
+```text
+configs/concat_tav_hubert_expression_d512.yaml
+```
+
+Result:
+
+| Model | Context | Fusion | Best Dev Weighted F1 | Test Weighted F1 | Test Macro F1 |
+|---|---|---|---:|---:|---:|
+| concat_tav_hubert_expression_d512 | no | raw concat + MLP | 0.5047 | 0.5122 | 0.3409 |
+| context_lstm_residual_gated_fusion_fer_d512 | yes | text base + gated audio/FER residual | 0.5975 | 0.6012 | 0.4243 |
+
+Improvement of the current main model over simple concat:
+
+```text
+weighted_f1 +0.0890
+macro_f1    +0.0834
+```
+
+Interpretation:
+
+- The current gated contextual structure has a clear advantage over simple concat under the same input features and similar hidden width.
+- This comparison supports the project claim better than only comparing with text-only, because concat is the most direct naive multimodal baseline.
+- The improvement includes both dialogue context and residual gate design; if needed later, a context-only concat baseline can separate these two factors.
+
+## 2026-05-13 Visual Extraction Strategy: Face-only Top-k Pooling
+
+Motivation:
+
+- Replacing the visual backbone alone did not help.
+- The next hypothesis is that MELD video frames contain many noisy frames: no face, side face, wrong face, weak expression, or neutral transition.
+- Instead of using two visual models, keep one FER backbone and improve frame selection.
+
+Strategy:
+
+```text
+backbone = trpakov/vit-face-expression
+sample = 8 frames per utterance
+filter = keep only frames with detected face
+score = max FER softmax probability per frame
+pooling = average top-4 confident frames
+```
+
+Code/config updates:
+
+```text
+src/extract_visual_expression_features.py
+src/feature_dataset.py
+src/train.py
+src/evaluate.py
+src/export_logits.py
+src/models/baselines.py
+configs/visual_expression_topk_only.yaml
+configs/context_lstm_residual_gated_fusion_fer_topk_d512.yaml
+configs/concat_tav_hubert_expression_topk_d512.yaml
+```
+
+Feature extraction:
+
+```text
+features/visual_expression_topk/train.pt  shape=(9989, 782) available=9934
+features/visual_expression_topk/dev.pt    shape=(1109, 782) available=1100
+features/visual_expression_topk/test.pt   shape=(2610, 782) available=2598
+```
+
+Single visual modality result:
+
+| Model | Test Accuracy | Test Weighted F1 | Test Macro F1 |
+|---|---:|---:|---:|
+| old visual_expression_only | 0.2751 | 0.2966 | 0.1807 |
+| top-k visual_expression_topk_only | 0.2241 | 0.2087 | 0.1407 |
+
+The top-k visual feature is worse as a standalone classifier. This likely means it loses broad neutral/scene-level information.
+
+Main fusion result:
+
+| Model | Best Dev Weighted F1 | Test Accuracy | Test Weighted F1 | Test Macro F1 |
+|---|---:|---:|---:|---:|
+| old context_lstm_residual_gated_fusion_fer_d512 | 0.5975 | 0.5969 | 0.6012 | 0.4243 |
+| top-k context_lstm_residual_gated_fusion_fer_topk_d512 | 0.5897 | 0.6015 | 0.6064 | 0.4401 |
+
+Simple concat comparison with the same top-k visual feature:
+
+| Model | Best Dev Weighted F1 | Test Weighted F1 | Test Macro F1 |
+|---|---:|---:|---:|
+| concat_tav_hubert_expression_topk_d512 | 0.5755 | 0.5798 | 0.4255 |
+| context_lstm_residual_gated_fusion_fer_topk_d512 | 0.5897 | 0.6064 | 0.4401 |
+
+Zero-modality checks:
+
+| Setting | Test Weighted F1 | Test Macro F1 |
+|---|---:|---:|
+| full text+audio+top-k FER | 0.6064 | 0.4401 |
+| zero audio | 0.5578 | 0.4132 |
+| zero top-k FER visual | 0.5734 | 0.3944 |
+| zero audio+top-k FER visual | 0.5494 | 0.3821 |
+
+Gate averages on test:
+
+```text
+gate_text   = 1.0000
+gate_audio  = 0.9561
+gate_visual = 0.8687
+```
+
+Interpretation:
+
+- As a standalone visual classifier, face-only top-k pooling is worse.
+- But as a residual correction signal inside the multimodal model, it improves both weighted F1 and macro F1.
+- This supports the idea that the visual branch does not need to be a strong independent classifier; it needs to provide reliable correction cues.
+- Current best frozen-feature main model should be updated to `context_lstm_residual_gated_fusion_fer_topk_d512`, with the caveat that dev weighted F1 is lower than the old visual version while test F1 is better.
+
+## 2026-05-13 Stronger FER/Affect Visual Backbone Attempt
+
+Goal:
+
+- Keep the current audio branch unchanged.
+- Replace the visual expression backbone with a FER/Affect-oriented model that may be closer to emotion recognition than CLIP-style visual semantics.
+
+Selected model:
+
+```text
+mo-thecreator/vit-Facial-Expression-Recognition
+```
+
+Reason:
+
+- It is still a ViT image classification model, so the current face-crop + multi-frame averaging pipeline can reuse it.
+- The model card reports training on FER2013, MMI, and AffectNet, which should be more aligned with facial expression recognition than generic CLIP image features.
+
+Code/config updates:
+
+```text
+src/extract_visual_expression_features.py
+src/feature_dataset.py
+src/train.py
+src/evaluate.py
+src/export_logits.py
+src/models/baselines.py
+configs/visual_expression_affectnet_only.yaml
+configs/context_lstm_residual_gated_fusion_affectnet_d512.yaml
+```
+
+New modality name:
+
+```text
+visual_expression_affectnet -> features/visual_expression_affectnet
+```
+
+Feature extraction:
+
+```text
+features/visual_expression_affectnet/train.pt  shape=(9989, 782) available=9988
+features/visual_expression_affectnet/dev.pt    shape=(1109, 782) available=1108
+features/visual_expression_affectnet/test.pt   shape=(2610, 782) available=2610
+```
+
+Single visual modality result:
+
+| Model | Test Accuracy | Test Weighted F1 | Test Macro F1 |
+|---|---:|---:|---:|
+| old visual_expression_only | 0.2751 | 0.2966 | 0.1807 |
+| new visual_expression_affectnet_only | 0.2778 | 0.2694 | 0.1797 |
+
+Main fusion result:
+
+| Model | Best Dev Weighted F1 | Test Accuracy | Test Weighted F1 | Test Macro F1 |
+|---|---:|---:|---:|---:|
+| old context_lstm_residual_gated_fusion_fer_d512 | 0.5975 | 0.5969 | 0.6012 | 0.4243 |
+| new context_lstm_residual_gated_fusion_affectnet_d512 | 0.5932 | 0.5697 | 0.5853 | 0.4234 |
+
+Zero-modality checks for the new visual backbone:
+
+| Setting | Test Weighted F1 | Test Macro F1 |
+|---|---:|---:|
+| full text+audio+new visual | 0.5853 | 0.4234 |
+| zero audio | 0.5240 | 0.3792 |
+| zero new visual | 0.5302 | 0.3875 |
+| zero audio+new visual | 0.4547 | 0.3418 |
+
+Gate averages on test:
+
+```text
+gate_text   = 1.0000
+gate_audio  = 0.9702
+gate_visual = 0.9969
+```
+
+Interpretation:
+
+- This replacement did not improve the project.
+- The new FER/Affect visual-only result is lower than the old FER visual-only weighted F1.
+- In the main fusion model, the new visual backbone also reduces test weighted F1 from `0.6012` to `0.5853`.
+- The zero-visual result drops sharply, which means the model relies heavily on this new visual branch, but that reliance is not beneficial enough for final performance.
+- For visual backbone replacement alone, do not replace `trpakov/vit-face-expression` with this Affect-oriented model.
+- This conclusion is about the backbone-swap attempt only; the later/stronger result comes from changing frame pooling while keeping `trpakov/vit-face-expression`.
+
+## 2026-05-13 Audio Feature Improvement Check
+
+Goal:
+
+- Re-check whether the audio branch should be upgraded after the visual top-k strategy became the current main line.
+- Keep the main model simple and course-project-friendly: improve the audio feature itself first, then test whether it helps the same residual gated fusion structure.
+
+Current selected main line before this pass:
+
+```text
+context_lstm_residual_gated_fusion_fer_topk_d512
+audio feature: torchaudio.pipelines.HUBERT_BASE mean pooling, 768 dim
+visual feature: trpakov/vit-face-expression top-k confident frame pooling, 782 dim
+test weighted_f1=0.6064, macro_f1=0.4401
+```
+
+Tested audio alternatives:
+
+1. `audio_hubert_stats`: HuBERT frame mean + std, 1536 dim.
+2. `audio_hubert_prosody`: HuBERT mean + MFCC/pitch/energy prosody stats, 883 dim.
+3. `audio_emotion`: SER-oriented Wav2Vec2 model `Dpngtm/wav2vec2-emotion-recognition`, hidden mean + emotion logits + emotion probabilities, 782 dim.
+
+Code/config updates:
+
+```text
+src/extract_audio_emotion_features.py
+src/feature_dataset.py
+src/train.py
+src/evaluate.py
+src/export_logits.py
+src/models/baselines.py
+src/models/context.py
+src/models/__init__.py
+configs/audio_emotion_only.yaml
+configs/context_lstm_residual_gated_fusion_fer_topk_audio_emotion_d512.yaml
+configs/context_lstm_residual_gated_fusion_fer_topk_hubert_prosody_d512.yaml
+configs/context_lstm_residual_gated_fusion_fer_topk_hubert_stats_d512.yaml
+```
+
+Extracted SER audio features:
+
+```text
+features/audio_emotion/train.pt  shape=(9989, 782) available=9988
+features/audio_emotion/dev.pt    shape=(1109, 782) available=1108
+features/audio_emotion/test.pt   shape=(2610, 782) available=2610
+```
+
+Single audio modality results:
+
+| Model | Test Accuracy | Test Weighted F1 | Test Macro F1 |
+|---|---:|---:|---:|
+| audio_hubert_only | 0.2927 | 0.3185 | 0.2182 |
+| audio_hubert_stats_only | 0.3172 | 0.3350 | 0.2161 |
+| audio_hubert_prosody_only | 0.3123 | 0.3406 | 0.2398 |
+| audio_emotion_only | 0.2215 | 0.2440 | 0.1749 |
+
+Main fusion comparison with the same top-k visual branch:
+
+| Audio feature | Best Dev Weighted F1 | Test Accuracy | Test Weighted F1 | Test Macro F1 |
+|---|---:|---:|---:|---:|
+| HuBERT mean | 0.5897 | 0.6015 | 0.6064 | 0.4401 |
+| HuBERT mean+std | 0.5715 | 0.5590 | 0.5824 | 0.4270 |
+| HuBERT+prosody | 0.5921 | 0.6161 | 0.6057 | 0.4256 |
+| SER audio_emotion | 0.5805 | 0.5751 | 0.5904 | 0.4312 |
+
+Important ablation for HuBERT+prosody:
+
+```text
+full HuBERT+prosody fusion       weighted_f1=0.6057  macro_f1=0.4256
+zero audio_hubert_prosody        weighted_f1=0.6179  macro_f1=0.4230
+zero visual_expression_topk      weighted_f1=0.5746  macro_f1=0.3771
+zero audio+visual                weighted_f1=0.5518  macro_f1=0.3440
+```
+
+Conclusion:
+
+- `audio_hubert_prosody` is the best audio-only cached feature so far, but it does not improve the full multimodal model.
+- The external SER model transfers poorly to MELD; its audio-only score is lower than HuBERT/prosody, and its fusion result is also worse.
+- The current main line should keep the original HuBERT mean audio feature for now, because it has the best full-model weighted F1 and macro F1.
+- The practical interpretation is that audio improvement cannot be solved just by increasing dimensionality or adding an external SER classifier. The useful next audio direction would be MELD-specific audio fine-tuning or a stronger model trained/evaluated closer to conversational speech, but that should be treated as a separate, larger experiment.
+
+## 2026-05-14 Plan Files Consolidated
+
+The standalone planning files were consolidated into this work log so the final project directory is cleaner.
+
+Removed planning files:
+
+```text
+single_modality_improvement_plan.md
+visual_modality_improvement_plan.md
+residual_context_fusion_plan.md
+```
+
+Important conclusions preserved:
+
+1. Single-modality bottleneck:
+   - The small early multimodal gain was not mainly caused by the fusion gate itself.
+   - Audio and visual frozen features were much weaker than text, so fusion could only use them cautiously.
+   - Deeper audio MLP heads did not solve the problem:
+     - `audio_hubert_mlp` only slightly improved over shallow HuBERT.
+     - `audio_hubert_stats_mlp` and `audio_hubert_prosody_mlp` were worse than their simpler baselines.
+   - Conclusion: the audio bottleneck is feature quality/domain alignment, not just classifier-head capacity.
+
+2. Visual modality direction:
+   - Generic CLIP visual features were too scene/semantic-oriented for MELD emotion recognition.
+   - The useful visual direction was face-centered FER/expression features, not another generic image encoder.
+   - The final useful strategy became:
+
+```text
+trpakov/vit-face-expression
++ face crop
++ 8 sampled frames
++ top-4 confident FER frames
++ mean pooling
+```
+
+   - The AffectNet-style replacement backbone was tested but did not beat the original FER backbone, so the final visual branch keeps `trpakov/vit-face-expression`.
+
+3. Residual gated context fusion:
+   - The main architecture came from the residual-correction idea:
+
+```text
+final_logits =
+    text_logits
+    + sigmoid(audio_gate)  * audio_residual_scale  * audio_delta
+    + sigmoid(visual_gate) * visual_residual_scale * visual_delta
+```
+
+   - This avoids forcing weak audio/visual branches to compete directly with text.
+   - Independent sigmoid gates are better aligned with the idea that audio and visual can each decide whether to correct the text base.
+   - Dialogue-level BiLSTM context was kept because MELD emotion labels often depend on surrounding utterances.
+
+Final retained main line after these plans:
+
+```text
+configs/context_lstm_residual_gated_fusion_fer_topk_d512.yaml
+RoBERTa text + HuBERT mean audio + top-k FER visual
+d_model=512
+dialogue BiLSTM context
+residual gated audio/visual correction
+```

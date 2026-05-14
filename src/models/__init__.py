@@ -8,6 +8,7 @@ from src.models.baselines import (
     AudioHubertProsodyDeepClassifier,
     AudioHubertStatsDeepClassifier,
     AudioHubertStatsOnlyClassifier,
+    AudioEmotionOnlyClassifier,
     AudioProsodyOnlyClassifier,
     ConcatClassifier,
     ConcatTAVClassifier,
@@ -17,8 +18,10 @@ from src.models.baselines import (
     TextAudioHubertProsodyClassifier,
     TextAudioHubertStatsClassifier,
     TextVisualFaceClassifier,
+    TextVisualExpressionClassifier,
     TextVisualClassifier,
     VisualFaceOnlyClassifier,
+    VisualExpressionOnlyClassifier,
     VisualOnlyClassifier,
     build_audio_only_model,
     build_audio_hubert_mlp_model,
@@ -27,6 +30,7 @@ from src.models.baselines import (
     build_audio_hubert_prosody_only_model,
     build_audio_hubert_stats_mlp_model,
     build_audio_hubert_stats_only_model,
+    build_audio_emotion_only_model,
     build_audio_prosody_only_model,
     build_baseline_model,
     build_concat_tav_model,
@@ -36,11 +40,20 @@ from src.models.baselines import (
     build_text_audio_hubert_stats_model,
     build_text_only_model,
     build_text_visual_face_model,
+    build_text_visual_expression_model,
     build_text_visual_model,
     build_visual_face_only_model,
+    build_visual_expression_only_model,
     build_visual_only_model,
 )
-from src.models.context import DGFContextClassifier, build_dgf_context_model
+from src.models.context import (
+    ContextLSTMResidualGatedFusionClassifier,
+    ContextResidualGatedFusionClassifier,
+    DGFContextClassifier,
+    build_context_lstm_residual_gated_fusion_model,
+    build_context_residual_gated_fusion_model,
+    build_dgf_context_model,
+)
 from src.models.fusion import (
     AsymmetricQualityLogitFusionClassifier,
     DynamicGatedFusionClassifier,
@@ -64,6 +77,7 @@ def build_model(config: dict | None = None):
         "audio_hubert_stats_only",
         "audio_prosody_only",
         "audio_hubert_prosody_only",
+        "audio_emotion_only",
         "audio_hubert_mlp",
         "audio_hubert_stats_mlp",
         "audio_hubert_prosody_mlp",
@@ -74,15 +88,21 @@ def build_model(config: dict | None = None):
         "text_audio_hubert_prosody",
         "text_visual",
         "text_visual_face",
+        "text_visual_expression",
         "concat_tav",
         "concat_tav_hubert_stats_face",
         "visual_face_only",
+        "visual_expression_only",
     }:
         return build_baseline_model(config)
     if model_name in {"dgf", "dgf_dropout"}:
         return build_dgf_model(config)
     if model_name == "dgf_context":
         return build_dgf_context_model(config)
+    if model_name == "context_residual_gated_fusion":
+        return build_context_residual_gated_fusion_model(config)
+    if model_name == "context_lstm_residual_gated_fusion":
+        return build_context_lstm_residual_gated_fusion_model(config)
     if model_name in {"late_fusion_hubert", "late_fusion_hubert_face", "late_fusion_hubert_stats"}:
         return build_late_fusion_hubert_model(config)
     if model_name == "quality_late_fusion_hubert":
@@ -95,6 +115,8 @@ __all__ = [
     "AsymmetricQualityLogitFusionClassifier",
     "ConcatTAVClassifier",
     "ConcatClassifier",
+    "ContextLSTMResidualGatedFusionClassifier",
+    "ContextResidualGatedFusionClassifier",
     "DGFContextClassifier",
     "DynamicGatedFusionClassifier",
     "LateFusionHubertClassifier",
@@ -106,22 +128,26 @@ __all__ = [
     "TextAudioHubertProsodyClassifier",
     "TextVisualClassifier",
     "TextVisualFaceClassifier",
+    "TextVisualExpressionClassifier",
     "AudioOnlyClassifier",
     "AudioHubertDeepClassifier",
     "AudioHubertOnlyClassifier",
     "AudioHubertStatsDeepClassifier",
     "AudioHubertStatsOnlyClassifier",
+    "AudioEmotionOnlyClassifier",
     "AudioProsodyOnlyClassifier",
     "AudioHubertProsodyDeepClassifier",
     "AudioHubertProsodyOnlyClassifier",
     "VisualOnlyClassifier",
     "VisualFaceOnlyClassifier",
+    "VisualExpressionOnlyClassifier",
     "build_audio_only_model",
     "build_audio_hubert_mlp_model",
     "build_audio_hubert_only_model",
     "build_audio_hubert_stats_mlp_model",
     "build_audio_hubert_stats_only_model",
     "build_audio_hubert_prosody_mlp_model",
+    "build_audio_emotion_only_model",
     "build_audio_prosody_only_model",
     "build_audio_hubert_prosody_only_model",
     "build_baseline_model",
@@ -132,13 +158,17 @@ __all__ = [
     "build_text_audio_hubert_stats_model",
     "build_text_audio_hubert_prosody_model",
     "build_dgf_context_model",
+    "build_context_lstm_residual_gated_fusion_model",
+    "build_context_residual_gated_fusion_model",
     "build_dgf_model",
     "build_late_fusion_hubert_model",
     "build_quality_late_fusion_hubert_model",
     "build_model",
     "build_text_only_model",
     "build_text_visual_face_model",
+    "build_text_visual_expression_model",
     "build_text_visual_model",
     "build_visual_face_only_model",
+    "build_visual_expression_only_model",
     "build_visual_only_model",
 ]

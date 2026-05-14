@@ -61,8 +61,14 @@ def active_modalities(config: dict) -> tuple[str, ...]:
         "audio_hubert_stats",
         "audio_prosody",
         "audio_hubert_prosody",
+        "audio_emotion",
         "visual",
         "visual_face",
+        "visual_expression",
+        "visual_expression_affectnet",
+        "visual_expression_topk",
+        "visual_expression_compact",
+        "visual_clip_expression",
     )
     return tuple(name for name in names if enabled.get(name, False))
 

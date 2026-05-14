@@ -38,6 +38,8 @@ GATED_MODELS = {
     "late_fusion_hubert_face",
     "late_fusion_hubert_stats",
     "quality_late_fusion_hubert",
+    "context_residual_gated_fusion",
+    "context_lstm_residual_gated_fusion",
 }
 
 
@@ -51,8 +53,14 @@ def active_modalities(config: dict) -> tuple[str, ...]:
         "audio_hubert_stats",
         "audio_prosody",
         "audio_hubert_prosody",
+        "audio_emotion",
         "visual",
         "visual_face",
+        "visual_expression",
+        "visual_expression_affectnet",
+        "visual_expression_topk",
+        "visual_expression_compact",
+        "visual_clip_expression",
     )
     return tuple(name for name in names if enabled.get(name, False))
 
@@ -369,8 +377,14 @@ def parse_args() -> argparse.Namespace:
             "audio_hubert_stats",
             "audio_prosody",
             "audio_hubert_prosody",
+            "audio_emotion",
             "visual",
             "visual_face",
+            "visual_expression",
+            "visual_expression_affectnet",
+            "visual_expression_topk",
+            "visual_expression_compact",
+            "visual_clip_expression",
         ),
     )
     return parser.parse_args()

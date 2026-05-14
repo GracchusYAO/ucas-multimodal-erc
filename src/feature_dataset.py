@@ -22,8 +22,14 @@ MODALITY_DIRS = {
     "audio_hubert_stats": "audio_hubert_stats",
     "audio_prosody": "audio_prosody",
     "audio_hubert_prosody": "audio_hubert_prosody",
+    "audio_emotion": "audio_emotion",
     "visual": "visual_clip",
     "visual_face": "visual_face_clip",
+    "visual_expression": "visual_expression",
+    "visual_expression_affectnet": "visual_expression_affectnet",
+    "visual_expression_topk": "visual_expression_topk",
+    "visual_expression_compact": "visual_expression_compact",
+    "visual_clip_expression": "visual_clip_expression",
 }
 
 

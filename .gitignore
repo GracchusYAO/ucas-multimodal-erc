@@ -218,6 +218,25 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# Project generated artifacts / large local files
+.torch_cache/
+checkpoints/
+features/
+logs/
+results/
+runs/
+wandb/
+*.pt
+*.pth
+
+# MELD raw media is large; keep CSV metadata only if needed.
+data/meld/train_splits/
+data/meld/dev_splits_complete/
+data/meld/output_repeated_splits_test/
+
+# Local exported discussion/report copies
+*.pdf
+
 # Project artifacts and local datasets
 data/
 features/

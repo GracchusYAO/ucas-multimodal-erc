@@ -1,0 +1,27 @@
+model_name: visual_expression_only
+modalities:
+  text: false
+  audio: false
+  audio_hubert: false
+  audio_hubert_stats: false
+  audio_prosody: false
+  audio_hubert_prosody: false
+  visual: false
+  visual_face: false
+  visual_expression: false
+  visual_expression_compact: true
+
+output_dim_visual_expression: 14
+batch_size_utterance: 64
+
+projection_dim: 64
+dropout: 0.3
+num_classes: 7
+
+optimizer: adamw
+learning_rate: 0.0001
+weight_decay: 0.0001
+max_epochs: 50
+early_stopping_patience: 5
+loss: weighted_cross_entropy
+seed: 114514

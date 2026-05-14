@@ -83,6 +83,10 @@ class AudioHubertProsodyOnlyClassifier(SingleModalityClassifier):
     """Audio-only baseline：HuBERT + prosody 拼接特征 -> MLP -> 情绪分类。"""
 
 
+class AudioEmotionOnlyClassifier(SingleModalityClassifier):
+    """Audio-only baseline：SER 模型情绪音频特征 -> MLP -> 情绪分类。"""
+
+
 class AudioHubertDeepClassifier(DeepSingleModalityClassifier):
     """更强音频 baseline：HuBERT 特征 -> deeper MLP。"""
 
@@ -101,6 +105,10 @@ class VisualOnlyClassifier(SingleModalityClassifier):
 
 class VisualFaceOnlyClassifier(SingleModalityClassifier):
     """Visual-face baseline：face-centered CLIP 特征 -> MLP -> 情绪分类。"""
+
+
+class VisualExpressionOnlyClassifier(SingleModalityClassifier):
+    """Visual-expression baseline：表情模型特征 -> MLP -> 情绪分类。"""
 
 
 class ConcatClassifier(nn.Module):
@@ -150,6 +158,10 @@ class TextVisualClassifier(ConcatClassifier):
 
 class TextVisualFaceClassifier(ConcatClassifier):
     """Text+Face-Visual concat baseline。"""
+
+
+class TextVisualExpressionClassifier(ConcatClassifier):
+    """Text+Expression-Visual concat baseline。"""
 
 
 class ConcatTAVClassifier(ConcatClassifier):
@@ -222,6 +234,17 @@ def build_audio_hubert_prosody_only_model(config: dict | None = None) -> AudioHu
     )
 
 
+def build_audio_emotion_only_model(config: dict | None = None) -> AudioEmotionOnlyClassifier:
+    """按 YAML 配置构造 SER audio-only baseline。"""
+    config = config or {}
+    return AudioEmotionOnlyClassifier(
+        input_dim=int(config.get("output_dim_audio_emotion", 782)),
+        projection_dim=int(config.get("projection_dim", 256)),
+        dropout=float(config.get("dropout", 0.3)),
+        num_classes=int(config.get("num_classes", 7)),
+    )
+
+
 def read_hidden_dims(config: dict, default: tuple[int, ...] = (512, 256)) -> tuple[int, ...]:
     """从 YAML 读取 hidden_dims；没有配置时用简单两层 MLP。"""
     value = config.get("hidden_dims", default)
@@ -279,6 +302,21 @@ def build_visual_face_only_model(config: dict | None = None) -> VisualFaceOnlyCl
     config = config or {}
     return VisualFaceOnlyClassifier(
         input_dim=int(config.get("output_dim_visual_face", config.get("output_dim_visual", 512))),
+        projection_dim=int(config.get("projection_dim", 256)),
+        dropout=float(config.get("dropout", 0.3)),
+        num_classes=int(config.get("num_classes", 7)),
+    )
+
+
+def visual_expression_dim(config: dict) -> int:
+    return int(config.get("output_dim_visual_expression", config.get("output_dim_visual", 782)))
+
+
+def build_visual_expression_only_model(config: dict | None = None) -> VisualExpressionOnlyClassifier:
+    """按 YAML 配置构造 expression visual-only baseline。"""
+    config = config or {}
+    return VisualExpressionOnlyClassifier(
+        input_dim=visual_expression_dim(config),
         projection_dim=int(config.get("projection_dim", 256)),
         dropout=float(config.get("dropout", 0.3)),
         num_classes=int(config.get("num_classes", 7)),
@@ -369,6 +407,20 @@ def build_text_visual_face_model(config: dict | None = None) -> TextVisualFaceCl
     )
 
 
+def build_text_visual_expression_model(config: dict | None = None) -> TextVisualExpressionClassifier:
+    """按 YAML 配置构造 text+expression visual concat baseline。"""
+    config = config or {}
+    return TextVisualExpressionClassifier(
+        input_dims=(
+            int(config.get("output_dim_text", 768)),
+            visual_expression_dim(config),
+        ),
+        projection_dim=int(config.get("projection_dim", 256)),
+        dropout=float(config.get("dropout", 0.3)),
+        num_classes=int(config.get("num_classes", 7)),
+    )
+
+
 def build_concat_tav_model(config: dict | None = None) -> ConcatTAVClassifier:
     """按 YAML 配置构造三模态拼接 baseline。"""
     config = config or {}
@@ -377,6 +429,8 @@ def build_concat_tav_model(config: dict | None = None) -> ConcatTAVClassifier:
     # 这里根据配置自动选音频维度，方便比较普通 audio / HuBERT / HuBERT mean+std。
     if modalities.get("audio_hubert_prosody", False):
         audio_dim = int(config.get("output_dim_audio_hubert_prosody", config.get("output_dim_audio_hubert", 883)))
+    elif modalities.get("audio_emotion", False):
+        audio_dim = int(config.get("output_dim_audio_emotion", 782))
     elif modalities.get("audio_prosody", False):
         audio_dim = int(config.get("output_dim_audio_prosody", 115))
     elif modalities.get("audio_hubert_stats", False):
@@ -387,7 +441,14 @@ def build_concat_tav_model(config: dict | None = None) -> ConcatTAVClassifier:
         audio_dim = int(config.get("output_dim_audio", 768))
 
     # 视觉同理：整帧 CLIP 和人脸裁剪 CLIP 都共用这个 concat baseline。
-    if modalities.get("visual_face", False):
+    if (
+        modalities.get("visual_expression", False)
+        or modalities.get("visual_expression_affectnet", False)
+        or modalities.get("visual_expression_topk", False)
+        or modalities.get("visual_expression_compact", False)
+    ):
+        visual_dim = visual_expression_dim(config)
+    elif modalities.get("visual_face", False):
         visual_dim = int(config.get("output_dim_visual_face", config.get("output_dim_visual", 512)))
     else:
         visual_dim = int(config.get("output_dim_visual", 512))
@@ -420,6 +481,8 @@ def build_baseline_model(config: dict | None = None) -> nn.Module:
         return build_audio_prosody_only_model(config)
     if model_name == "audio_hubert_prosody_only":
         return build_audio_hubert_prosody_only_model(config)
+    if model_name == "audio_emotion_only":
+        return build_audio_emotion_only_model(config)
     if model_name == "audio_hubert_mlp":
         return build_audio_hubert_mlp_model(config)
     if model_name == "audio_hubert_stats_mlp":
@@ -430,6 +493,8 @@ def build_baseline_model(config: dict | None = None) -> nn.Module:
         return build_visual_only_model(config)
     if model_name == "visual_face_only":
         return build_visual_face_only_model(config)
+    if model_name == "visual_expression_only":
+        return build_visual_expression_only_model(config)
     if model_name == "text_audio":
         return build_text_audio_model(config)
     if model_name == "text_audio_hubert":
@@ -442,6 +507,8 @@ def build_baseline_model(config: dict | None = None) -> nn.Module:
         return build_text_visual_model(config)
     if model_name == "text_visual_face":
         return build_text_visual_face_model(config)
+    if model_name == "text_visual_expression":
+        return build_text_visual_expression_model(config)
     if model_name in {"concat_tav", "concat_tav_hubert_stats_face"}:
         return build_concat_tav_model(config)
     raise ValueError(f"Unsupported baseline model: {model_name}")

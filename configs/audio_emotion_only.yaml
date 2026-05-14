@@ -1,0 +1,35 @@
+model_name: audio_emotion_only
+
+modalities:
+  text: false
+  audio: false
+  audio_hubert: false
+  audio_hubert_stats: false
+  audio_prosody: false
+  audio_hubert_prosody: false
+  audio_emotion: true
+  visual: false
+  visual_face: false
+  visual_expression: false
+  visual_expression_affectnet: false
+  visual_expression_topk: false
+  visual_expression_compact: false
+  visual_clip_expression: false
+
+audio_emotion_model: Dpngtm/wav2vec2-emotion-recognition
+batch_size_audio_emotion: 4
+max_audio_seconds: 12
+output_dim_audio_emotion: 782
+
+projection_dim: 256
+dropout: 0.3
+num_classes: 7
+
+optimizer: adamw
+learning_rate: 0.0001
+weight_decay: 0.0001
+batch_size_utterance: 64
+max_epochs: 50
+early_stopping_patience: 5
+loss: weighted_cross_entropy
+seed: 114514

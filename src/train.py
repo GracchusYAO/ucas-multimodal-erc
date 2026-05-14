@@ -14,7 +14,6 @@ from pathlib import Path
 os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")  # 当前 WSL/conda 环境里 dynamo 导入不稳定
 os.environ.setdefault("TORCH_COMPILE_DISABLE", "1")
 
-from sklearn.metrics import accuracy_score, f1_score
 from src.torch_import_patch import patch_inspect_for_torch, restore_common_builtins, stub_torch_dynamo
 
 restore_common_builtins()
@@ -59,6 +58,31 @@ def class_weights(labels: torch.Tensor, num_classes: int) -> torch.Tensor:
     return counts.sum() / (counts.clamp(min=1) * num_classes)  # 少数类权重大一些
 
 
+def classification_metrics(
+    gold_labels: list[int],
+    predictions: list[int],
+    num_classes: int,
+) -> dict[str, float]:
+    """不用 sklearn，直接按混淆矩阵算 accuracy / weighted F1 / macro F1。"""
+    matrix = torch.zeros(num_classes, num_classes, dtype=torch.float32)
+    for gold, pred in zip(gold_labels, predictions):
+        matrix[int(gold), int(pred)] += 1
+
+    total = matrix.sum().clamp(min=1.0)
+    true_positive = matrix.diag()
+    support = matrix.sum(dim=1)
+    predicted = matrix.sum(dim=0)
+    precision = true_positive / predicted.clamp(min=1.0)
+    recall = true_positive / support.clamp(min=1.0)
+    f1 = 2 * precision * recall / (precision + recall).clamp(min=1e-12)
+
+    return {
+        "accuracy": float(true_positive.sum().item() / total.item()),
+        "weighted_f1": float((f1 * support).sum().item() / total.item()),
+        "macro_f1": float(f1.mean().item()),
+    }
+
+
 def active_modalities(config: dict) -> tuple[str, ...]:
     """从 config 里读出当前模型使用哪些模态。"""
     enabled = config.get("modalities", {"text": True})
@@ -69,8 +93,14 @@ def active_modalities(config: dict) -> tuple[str, ...]:
         "audio_hubert_stats",
         "audio_prosody",
         "audio_hubert_prosody",
+        "audio_emotion",
         "visual",
         "visual_face",
+        "visual_expression",
+        "visual_expression_affectnet",
+        "visual_expression_topk",
+        "visual_expression_compact",
+        "visual_clip_expression",
     )
     return tuple(name for name in names if enabled.get(name, False))
 
@@ -212,9 +242,11 @@ def evaluate(
 
     return {
         "loss": total_loss / total_count,
-        "accuracy": accuracy_score(gold_labels, predictions),
-        "weighted_f1": f1_score(gold_labels, predictions, average="weighted", zero_division=0),
-        "macro_f1": f1_score(gold_labels, predictions, average="macro", zero_division=0),
+        **classification_metrics(
+            gold_labels,
+            predictions,
+            int(getattr(model, "num_classes", 7)) if hasattr(model, "num_classes") else 7,
+        ),
     }
 
 
